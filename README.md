@@ -55,7 +55,10 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
 - `GET /health` - Check API status
 
 ### Authentication
-- `POST /api/auth/register` - Register new user
+- `POST /api/auth/signup` - Sign up new user (with password validation)
+  - Body: `{ email, username, password, marketingEmails? }`
+  - Validates password requirements (8+ chars, uppercase, lowercase, special char, number)
+- `POST /api/auth/register` - Register new user (alias, backward compatibility)
 - `POST /api/auth/login` - Login user
 - `POST /api/auth/logout` - Logout user
 - `GET /api/auth/me` - Get current user
