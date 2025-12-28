@@ -131,31 +131,91 @@ router.post('/register', async (req, res) => {
   }
 })
 
-// Login user
+// Login user - matches the UI form
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body
 
+    // Validate input
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' })
+      return res.status(400).json({ 
+        error: 'Email and password are required',
+        field: !email ? 'email' : 'password'
+      })
     }
 
+    // Validate email format
+    const emailValidation = validateEmail(email)
+    if (!emailValidation.isValid) {
+      return res.status(400).json({ 
+        error: emailValidation.error,
+        field: 'email'
+      })
+    }
+
+    // Attempt login with Supabase
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim().toLowerCase(),
       password
     })
 
     if (error) {
-      return res.status(401).json({ error: error.message })
+      // Handle specific error cases
+      let errorMessage = 'Invalid email or password'
+      let statusCode = 401
+
+      if (error.message.includes('Invalid login credentials')) {
+        errorMessage = 'Invalid email or password'
+      } else if (error.message.includes('Email not confirmed')) {
+        errorMessage = 'Please verify your email before logging in'
+        statusCode = 403
+      } else if (error.message.includes('Too many requests')) {
+        errorMessage = 'Too many login attempts. Please try again later'
+        statusCode = 429
+      } else {
+        errorMessage = error.message
+      }
+
+      return res.status(statusCode).json({ 
+        error: errorMessage,
+        field: 'credentials'
+      })
+    }
+
+    // Fetch user profile if available
+    let userProfile = null
+    if (data.user) {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single()
+
+      if (!profileError && profile) {
+        userProfile = profile
+      }
     }
 
     res.json({
       message: 'Login successful',
-      user: data.user,
-      session: data.session
+      user: {
+        id: data.user?.id,
+        email: data.user?.email,
+        username: userProfile?.username || data.user?.user_metadata?.username,
+        ...userProfile
+      },
+      session: {
+        access_token: data.session?.access_token,
+        refresh_token: data.session?.refresh_token,
+        expires_in: data.session?.expires_in,
+        token_type: data.session?.token_type
+      }
     })
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    console.error('Login error:', error)
+    res.status(500).json({ 
+      error: 'An error occurred during login. Please try again.' 
+    })
   }
 })
 
