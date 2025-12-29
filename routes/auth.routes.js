@@ -4,14 +4,31 @@ import { validatePassword, validateEmail, validateUsername } from '../utils/vali
 
 const router = express.Router()
 
+// Signup endpoint - GET handler for documentation/testing
+router.get('/signup', (req, res) => {
+  res.status(405).json({
+    error: 'Method Not Allowed',
+    message: 'This endpoint only accepts POST requests. Please use POST with email, username, and password in the request body.',
+    method: 'POST',
+    endpoint: '/api/auth/signup',
+    requiredFields: ['email', 'username', 'password']
+  })
+})
+
 // Signup endpoint - matches the UI form
 router.post('/signup', async (req, res) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:8',message:'Signup route - request received',data:{hasEmail:!!req.body.email,hasUsername:!!req.body.username,hasPassword:!!req.body.password,emailPrefix:req.body.email?.substring(0,10)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
   try {
     const { email, username, password, marketingEmails } = req.body
 
     // Validate email
     const emailValidation = validateEmail(email)
     if (!emailValidation.isValid) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:15',message:'Signup - email validation failed',data:{error:emailValidation.error},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return res.status(400).json({ 
         error: emailValidation.error,
         field: 'email'
@@ -21,6 +38,9 @@ router.post('/signup', async (req, res) => {
     // Validate username
     const usernameValidation = validateUsername(username)
     if (!usernameValidation.isValid) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:23',message:'Signup - username validation failed',data:{error:usernameValidation.error},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return res.status(400).json({ 
         error: usernameValidation.error,
         field: 'username'
@@ -30,12 +50,19 @@ router.post('/signup', async (req, res) => {
     // Validate password
     const passwordValidation = validatePassword(password)
     if (!passwordValidation.isValid) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:31',message:'Signup - password validation failed',data:{errors:passwordValidation.errors},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return res.status(400).json({ 
         error: 'Password does not meet requirements',
         field: 'password',
         requirements: passwordValidation.errors
       })
     }
+
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:40',message:'Signup - before Supabase call',data:{hasSupabaseClient:!!supabase,frontendUrl:process.env.FRONTEND_URL||'http://localhost:5173'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
 
     // Sign up user with Supabase
     const { data, error } = await supabase.auth.signUp({
@@ -46,11 +73,18 @@ router.post('/signup', async (req, res) => {
           username: username,
           marketing_emails: marketingEmails || false
         },
-        emailRedirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback`
+        emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
       }
     })
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:52',message:'Signup - Supabase response',data:{hasError:!!error,hasData:!!data,hasUser:!!data?.user,hasSession:!!data?.session,errorMessage:error?.message||null,errorCode:error?.status||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
+
     if (error) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:54',message:'Signup - Supabase error occurred',data:{errorMessage:error.message,errorStatus:error.status,isAlreadyRegistered:error.message.includes('already registered')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
       // Handle specific Supabase errors
       if (error.message.includes('already registered')) {
         return res.status(409).json({ 
@@ -65,6 +99,9 @@ router.post('/signup', async (req, res) => {
 
     // Create user profile in profiles table
     if (data.user) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:67',message:'Signup - creating profile',data:{userId:data.user.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+      // #endregion
       const { error: profileError } = await supabase
         .from('profiles')
         .insert({
@@ -76,11 +113,21 @@ router.post('/signup', async (req, res) => {
         })
 
       if (profileError) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:78',message:'Signup - profile creation error',data:{errorMessage:profileError.message,errorCode:profileError.code,errorDetails:profileError.details},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
         console.error('Error creating profile:', profileError)
         // Don't fail the signup if profile creation fails
+      } else {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:81',message:'Signup - profile created successfully',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
       }
     }
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:84',message:'Signup - sending success response',data:{hasSession:!!data.session},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     res.status(201).json({
       message: 'Account created successfully',
       user: {
@@ -92,6 +139,9 @@ router.post('/signup', async (req, res) => {
       session: data.session || null
     })
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:95',message:'Signup - catch block error',data:{errorMessage:error.message,errorStack:error.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     console.error('Signup error:', error)
     res.status(500).json({ 
       error: 'An error occurred during signup. Please try again.' 
