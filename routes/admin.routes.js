@@ -774,4 +774,362 @@ router.get('/transactions', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// CATEGORIES MANAGEMENT
+// ============================================
+
+// Get all categories with product counts
+router.get('/categories', checkAdmin, async (req, res) => {
+  try {
+    const { limit = 10, offset = 0 } = req.query
+
+    // Get all unique categories with product counts
+    const { data: categoriesData, error: categoriesError } = await supabaseAdmin
+      .from('products')
+      .select('category')
+      .order('category', { ascending: true })
+
+    if (categoriesError) {
+      return res.status(500).json({ error: categoriesError.message })
+    }
+
+    // Group by category and count products
+    const categoryMap = {}
+    categoriesData.forEach(product => {
+      if (product.category) {
+        if (!categoryMap[product.category]) {
+          categoryMap[product.category] = {
+            name: product.category,
+            count: 0
+          }
+        }
+        categoryMap[product.category].count++
+      }
+    })
+
+    const categories = Object.values(categoryMap)
+      .sort((a, b) => b.count - a.count) // Sort by product count descending
+      .slice(parseInt(offset), parseInt(offset) + parseInt(limit))
+
+    // Get total count
+    const totalCategories = Object.keys(categoryMap).length
+
+    res.json({
+      categories,
+      total: totalCategories,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: totalCategories > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Categories error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get products by category
+router.get('/categories/:categoryName/products', checkAdmin, async (req, res) => {
+  try {
+    const { categoryName } = req.params
+    const { limit = 10, offset = 0, status } = req.query
+
+    let query = supabaseAdmin
+      .from('products')
+      .select('*', { count: 'exact' })
+      .eq('category', decodeURIComponent(categoryName))
+      .order('created_at', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    const { data, error, count } = await query
+
+    if (error) {
+      return res.status(500).json({ error: error.message })
+    }
+
+    res.json({
+      products: data || [],
+      category: decodeURIComponent(categoryName),
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Category products error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ============================================
+// PRODUCTS MANAGEMENT
+// ============================================
+
+// Get all products (admin view - includes inactive products)
+router.get('/products', checkAdmin, async (req, res) => {
+  try {
+    const { 
+      category, 
+      status, 
+      search,
+      limit = 50, 
+      offset = 0,
+      sortBy = 'created_at',
+      sortOrder = 'desc'
+    } = req.query
+
+    let query = supabaseAdmin
+      .from('products')
+      .select('*', { count: 'exact' })
+      .order(sortBy, { ascending: sortOrder === 'asc' })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filters
+    if (category) {
+      query = query.eq('category', category)
+    }
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,sku.ilike.%${search}%`)
+    }
+
+    const { data, error, count } = await query
+
+    if (error) {
+      return res.status(500).json({ error: error.message })
+    }
+
+    res.json({
+      products: data || [],
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Admin products error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get single product (admin view)
+router.get('/products/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (error) {
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
+    res.json(data)
+  } catch (error) {
+    console.error('Admin product error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Create new product
+router.post('/products', checkAdmin, async (req, res) => {
+  try {
+    const {
+      name,
+      description,
+      price,
+      image_url,
+      category,
+      subcategory,
+      stock = 0,
+      unit = 'piece',
+      weight,
+      is_organic = false,
+      is_fresh = true,
+      expiry_date,
+      brand,
+      sku,
+      status = 'active'
+    } = req.body
+
+    // Validation
+    if (!name || !price || !category) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        required: ['name', 'price', 'category']
+      })
+    }
+
+    if (price < 0) {
+      return res.status(400).json({ error: 'Price must be greater than or equal to 0' })
+    }
+
+    if (stock < 0) {
+      return res.status(400).json({ error: 'Stock must be greater than or equal to 0' })
+    }
+
+    if (!['active', 'inactive', 'out_of_stock'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be: active, inactive, or out_of_stock' })
+    }
+
+    const productData = {
+      name,
+      description,
+      price: parseFloat(price),
+      image_url,
+      category,
+      subcategory,
+      stock: parseInt(stock),
+      unit,
+      weight: weight ? parseFloat(weight) : null,
+      is_organic: Boolean(is_organic),
+      is_fresh: Boolean(is_fresh),
+      expiry_date: expiry_date || null,
+      brand: brand || null,
+      sku: sku || null,
+      status,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .insert([productData])
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Product creation error:', error)
+      return res.status(400).json({ error: error.message })
+    }
+
+    res.status(201).json({
+      message: 'Product created successfully',
+      product: data
+    })
+  } catch (error) {
+    console.error('Create product error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Update product
+router.put('/products/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+    const updates = req.body
+
+    // Validate price if provided
+    if (updates.price !== undefined && updates.price < 0) {
+      return res.status(400).json({ error: 'Price must be greater than or equal to 0' })
+    }
+
+    // Validate stock if provided
+    if (updates.stock !== undefined && updates.stock < 0) {
+      return res.status(400).json({ error: 'Stock must be greater than or equal to 0' })
+    }
+
+    // Validate status if provided
+    if (updates.status && !['active', 'inactive', 'out_of_stock'].includes(updates.status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be: active, inactive, or out_of_stock' })
+    }
+
+    // Convert numeric fields
+    if (updates.price !== undefined) {
+      updates.price = parseFloat(updates.price)
+    }
+    if (updates.stock !== undefined) {
+      updates.stock = parseInt(updates.stock)
+    }
+    if (updates.weight !== undefined && updates.weight !== null) {
+      updates.weight = parseFloat(updates.weight)
+    }
+
+    // Convert boolean fields
+    if (updates.is_organic !== undefined) {
+      updates.is_organic = Boolean(updates.is_organic)
+    }
+    if (updates.is_fresh !== undefined) {
+      updates.is_fresh = Boolean(updates.is_fresh)
+    }
+
+    // Add updated_at timestamp
+    updates.updated_at = new Date().toISOString()
+
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Product update error:', error)
+      return res.status(400).json({ error: error.message })
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
+    res.json({
+      message: 'Product updated successfully',
+      product: data
+    })
+  } catch (error) {
+    console.error('Update product error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete product
+router.delete('/products/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Check if product exists
+    const { data: product, error: fetchError } = await supabaseAdmin
+      .from('products')
+      .select('id, name')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !product) {
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
+    // Delete the product
+    const { error } = await supabaseAdmin
+      .from('products')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error('Product deletion error:', error)
+      return res.status(400).json({ error: error.message })
+    }
+
+    res.json({
+      message: 'Product deleted successfully',
+      deletedProduct: {
+        id: product.id,
+        name: product.name
+      }
+    })
+  } catch (error) {
+    console.error('Delete product error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
