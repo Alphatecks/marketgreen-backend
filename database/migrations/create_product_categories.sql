@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS product_categories (
     'Bakery', 
     'Grains', 
     'Organic', 
+    'Fresh',
     'Others', 
     'Uncategorized'
   )),

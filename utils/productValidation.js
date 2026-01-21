@@ -18,6 +18,7 @@ const ALLOWED_CATEGORIES = [
   'Bakery',
   'Grains',
   'Organic',
+  'Fresh',
   'Others',
   'Uncategorized'
 ]
