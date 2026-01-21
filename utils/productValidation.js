@@ -37,12 +37,29 @@ const LOW_STOCK_THRESHOLD = 10
 
 /**
  * Validate URL format
+ * Accepts HTTP/HTTPS URLs and data URLs (base64 images)
  */
 export const validateURL = (url) => {
   if (!url || typeof url !== 'string') {
     return { isValid: false, error: 'URL is required and must be a string' }
   }
 
+  // Check if it's a data URL (base64 image)
+  if (url.startsWith('data:image/')) {
+    // Validate data URL format: data:image/[type];base64,[data]
+    const dataUrlRegex = /^data:image\/(png|jpg|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/
+    if (dataUrlRegex.test(url)) {
+      return { isValid: true }
+    }
+    return { isValid: false, error: 'Invalid data URL format. Must be: data:image/[type];base64,[data]' }
+  }
+
+  // Check if it's a file path (for local development)
+  if (url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) {
+    return { isValid: true } // Allow file paths
+  }
+
+  // Validate HTTP/HTTPS URL
   try {
     const urlObj = new URL(url)
     if (!['http:', 'https:'].includes(urlObj.protocol)) {
