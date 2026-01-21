@@ -1372,6 +1372,7 @@ router.post('/products', checkAdmin, async (req, res) => {
       dimensions: dimensions ? dimensions.trim() : null,
       tags: tags && Array.isArray(tags) ? tags : [],
       // Keep backward compatibility fields
+      category: categories && categories.length > 0 ? categories[0] : 'Uncategorized', // Set first category for legacy field
       image_url: mainImage.trim(), // Map to old field
       status: finalProductStatus === 'Active' ? 'active' : 'inactive', // Map to old status
       created_at: new Date().toISOString(),
