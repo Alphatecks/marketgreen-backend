@@ -919,6 +919,259 @@ router.get('/products', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// BEST SELLING PRODUCTS
+// ============================================
+
+// Get best selling products
+router.get('/products/best-selling', checkAdmin, async (req, res) => {
+  try {
+    const { 
+      period = 'all', // 'all', '7days', '30days', '90days'
+      limit = 10,
+      minQuantity = 0
+    } = req.query
+
+    // Calculate date range based on period
+    let startDate = null
+    if (period !== 'all') {
+      const days = period === '7days' ? 7 : period === '30days' ? 30 : 90
+      startDate = new Date()
+      startDate.setDate(startDate.getDate() - days)
+      startDate.setHours(0, 0, 0, 0)
+    }
+
+    // Build query for successful orders
+    let ordersQuery = supabaseAdmin
+      .from('orders')
+      .select('id, items, created_at')
+      .in('status', ['confirmed', 'shipped', 'delivered'])
+      .eq('payment_status', 'paid')
+
+    if (startDate) {
+      ordersQuery = ordersQuery.gte('created_at', startDate.toISOString())
+    }
+
+    const { data: orders, error: ordersError } = await ordersQuery
+
+    if (ordersError) {
+      console.error('Error fetching orders:', ordersError)
+      return res.status(500).json({ error: ordersError.message })
+    }
+
+    if (!orders || orders.length === 0) {
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No orders found matching the criteria'
+      })
+    }
+
+    // Aggregate product sales from order items
+    const productSales = {}
+
+    orders.forEach(order => {
+      if (!order.items || !Array.isArray(order.items)) {
+        return
+      }
+
+      order.items.forEach(item => {
+        // Try multiple possible field names for product ID
+        const productId = item.product_id || item.id || item.productId
+        if (!productId) {
+          console.warn('Order item missing product ID:', item)
+          return
+        }
+
+        const quantity = parseInt(item.quantity || 1)
+        if (isNaN(quantity) || quantity <= 0) {
+          console.warn('Invalid quantity in order item:', item)
+          return
+        }
+
+        if (!productSales[productId]) {
+          productSales[productId] = {
+            product_id: productId,
+            total_quantity: 0,
+            order_ids: new Set()
+          }
+        }
+
+        productSales[productId].total_quantity += quantity
+        productSales[productId].order_ids.add(order.id)
+      })
+    })
+
+    // Calculate total orders for each product
+    Object.values(productSales).forEach(sales => {
+      sales.total_orders = sales.order_ids.size
+    })
+
+    // Filter by minimum quantity
+    const filteredProducts = Object.values(productSales).filter(
+      p => p.total_quantity >= parseInt(minQuantity)
+    )
+
+    // Sort by total quantity (descending), then by total orders (descending)
+    filteredProducts.sort((a, b) => {
+      if (b.total_quantity !== a.total_quantity) {
+        return b.total_quantity - a.total_quantity
+      }
+      return b.total_orders - a.total_orders
+    })
+
+    // Get top N products
+    const topProducts = filteredProducts.slice(0, parseInt(limit))
+
+    // Fetch product details for top products
+    const productIds = topProducts.map(p => p.product_id).filter(id => id) // Filter out null/undefined
+    
+    if (productIds.length === 0) {
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No products found matching the criteria'
+      })
+    }
+
+    // Validate UUIDs format (basic check)
+    const validProductIds = productIds.filter(id => {
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      return uuidRegex.test(id)
+    })
+
+    if (validProductIds.length === 0) {
+      console.warn('No valid product IDs found:', productIds)
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No valid product IDs found in orders'
+      })
+    }
+
+    const { data: products, error: productsError } = await supabaseAdmin
+      .from('products')
+      .select('id, name, image_url, price, stock, status')
+      .in('id', validProductIds)
+
+    if (productsError) {
+      console.error('Error fetching products:', productsError)
+      return res.status(500).json({ 
+        error: 'Failed to fetch product details',
+        details: productsError.message 
+      })
+    }
+
+    // Log if some products are missing
+    if (!products || products.length === 0) {
+      console.warn('No products found for IDs:', validProductIds)
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No products found in database for the order items'
+      })
+    }
+
+    if (products.length < validProductIds.length) {
+      const foundIds = products.map(p => p.id)
+      const missingIds = validProductIds.filter(id => !foundIds.includes(id))
+      console.warn('Some products not found:', missingIds)
+    }
+
+    // Create a map for quick product lookup
+    const productsMap = {}
+    products.forEach(product => {
+      productsMap[product.id] = product
+    })
+
+    // Combine sales data with product details
+    const bestSellingProducts = topProducts
+      .map(sales => {
+        const product = productsMap[sales.product_id]
+        if (!product) return null
+
+        // Determine stock status
+        const stockStatus = (product.stock > 0 && product.status !== 'out_of_stock') 
+          ? 'Stock' 
+          : 'Stock out'
+        const stockStatusColor = stockStatus === 'Stock' ? 'green' : 'red'
+
+        return {
+          id: product.id,
+          name: product.name,
+          image_url: product.image_url,
+          price: parseFloat(product.price || 0),
+          priceFormatted: new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'USD',
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+          }).format(product.price || 0),
+          totalOrder: sales.total_orders,
+          totalQuantity: sales.total_quantity,
+          stock: product.stock,
+          stockStatus,
+          stockStatusColor,
+          status: product.status
+        }
+      })
+      .filter(p => p !== null) // Remove null entries (products that were deleted)
+
+    res.json({
+      products: bestSellingProducts,
+      period,
+      periodLabel: period === 'all' 
+        ? 'All Time' 
+        : period === '7days' 
+          ? 'Last 7 Days' 
+          : period === '30days' 
+            ? 'Last 30 Days' 
+            : 'Last 90 Days',
+      total: bestSellingProducts.length,
+      limit: parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Best selling products error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Get single product (admin view)
 router.get('/products/:id', checkAdmin, async (req, res) => {
   try {
@@ -1177,259 +1430,6 @@ router.delete('/products/:id', checkAdmin, async (req, res) => {
     })
   } catch (error) {
     console.error('Delete product error:', error)
-    res.status(500).json({ error: error.message })
-  }
-})
-
-// ============================================
-// BEST SELLING PRODUCTS
-// ============================================
-
-// Get best selling products
-router.get('/products/best-selling', checkAdmin, async (req, res) => {
-  try {
-    const { 
-      period = 'all', // 'all', '7days', '30days', '90days'
-      limit = 10,
-      minQuantity = 0
-    } = req.query
-
-    // Calculate date range based on period
-    let startDate = null
-    if (period !== 'all') {
-      const days = period === '7days' ? 7 : period === '30days' ? 30 : 90
-      startDate = new Date()
-      startDate.setDate(startDate.getDate() - days)
-      startDate.setHours(0, 0, 0, 0)
-    }
-
-    // Build query for successful orders
-    let ordersQuery = supabaseAdmin
-      .from('orders')
-      .select('id, items, created_at')
-      .in('status', ['confirmed', 'shipped', 'delivered'])
-      .eq('payment_status', 'paid')
-
-    if (startDate) {
-      ordersQuery = ordersQuery.gte('created_at', startDate.toISOString())
-    }
-
-    const { data: orders, error: ordersError } = await ordersQuery
-
-    if (ordersError) {
-      console.error('Error fetching orders:', ordersError)
-      return res.status(500).json({ error: ordersError.message })
-    }
-
-    if (!orders || orders.length === 0) {
-      return res.json({
-        products: [],
-        period,
-        periodLabel: period === 'all' 
-          ? 'All Time' 
-          : period === '7days' 
-            ? 'Last 7 Days' 
-            : period === '30days' 
-              ? 'Last 30 Days' 
-              : 'Last 90 Days',
-        total: 0,
-        limit: parseInt(limit),
-        message: 'No orders found matching the criteria'
-      })
-    }
-
-    // Aggregate product sales from order items
-    const productSales = {}
-
-    orders.forEach(order => {
-      if (!order.items || !Array.isArray(order.items)) {
-        return
-      }
-
-      order.items.forEach(item => {
-        // Try multiple possible field names for product ID
-        const productId = item.product_id || item.id || item.productId
-        if (!productId) {
-          console.warn('Order item missing product ID:', item)
-          return
-        }
-
-        const quantity = parseInt(item.quantity || 1)
-        if (isNaN(quantity) || quantity <= 0) {
-          console.warn('Invalid quantity in order item:', item)
-          return
-        }
-
-        if (!productSales[productId]) {
-          productSales[productId] = {
-            product_id: productId,
-            total_quantity: 0,
-            order_ids: new Set()
-          }
-        }
-
-        productSales[productId].total_quantity += quantity
-        productSales[productId].order_ids.add(order.id)
-      })
-    })
-
-    // Calculate total orders for each product
-    Object.values(productSales).forEach(sales => {
-      sales.total_orders = sales.order_ids.size
-    })
-
-    // Filter by minimum quantity
-    const filteredProducts = Object.values(productSales).filter(
-      p => p.total_quantity >= parseInt(minQuantity)
-    )
-
-    // Sort by total quantity (descending), then by total orders (descending)
-    filteredProducts.sort((a, b) => {
-      if (b.total_quantity !== a.total_quantity) {
-        return b.total_quantity - a.total_quantity
-      }
-      return b.total_orders - a.total_orders
-    })
-
-    // Get top N products
-    const topProducts = filteredProducts.slice(0, parseInt(limit))
-
-    // Fetch product details for top products
-    const productIds = topProducts.map(p => p.product_id).filter(id => id) // Filter out null/undefined
-    
-    if (productIds.length === 0) {
-      return res.json({
-        products: [],
-        period,
-        periodLabel: period === 'all' 
-          ? 'All Time' 
-          : period === '7days' 
-            ? 'Last 7 Days' 
-            : period === '30days' 
-              ? 'Last 30 Days' 
-              : 'Last 90 Days',
-        total: 0,
-        limit: parseInt(limit),
-        message: 'No products found matching the criteria'
-      })
-    }
-
-    // Validate UUIDs format (basic check)
-    const validProductIds = productIds.filter(id => {
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-      return uuidRegex.test(id)
-    })
-
-    if (validProductIds.length === 0) {
-      console.warn('No valid product IDs found:', productIds)
-      return res.json({
-        products: [],
-        period,
-        periodLabel: period === 'all' 
-          ? 'All Time' 
-          : period === '7days' 
-            ? 'Last 7 Days' 
-            : period === '30days' 
-              ? 'Last 30 Days' 
-              : 'Last 90 Days',
-        total: 0,
-        limit: parseInt(limit),
-        message: 'No valid product IDs found in orders'
-      })
-    }
-
-    const { data: products, error: productsError } = await supabaseAdmin
-      .from('products')
-      .select('id, name, image_url, price, stock, status')
-      .in('id', validProductIds)
-
-    if (productsError) {
-      console.error('Error fetching products:', productsError)
-      return res.status(500).json({ 
-        error: 'Failed to fetch product details',
-        details: productsError.message 
-      })
-    }
-
-    // Log if some products are missing
-    if (!products || products.length === 0) {
-      console.warn('No products found for IDs:', validProductIds)
-      return res.json({
-        products: [],
-        period,
-        periodLabel: period === 'all' 
-          ? 'All Time' 
-          : period === '7days' 
-            ? 'Last 7 Days' 
-            : period === '30days' 
-              ? 'Last 30 Days' 
-              : 'Last 90 Days',
-        total: 0,
-        limit: parseInt(limit),
-        message: 'No products found in database for the order items'
-      })
-    }
-
-    if (products.length < validProductIds.length) {
-      const foundIds = products.map(p => p.id)
-      const missingIds = validProductIds.filter(id => !foundIds.includes(id))
-      console.warn('Some products not found:', missingIds)
-    }
-
-    // Create a map for quick product lookup
-    const productsMap = {}
-    products.forEach(product => {
-      productsMap[product.id] = product
-    })
-
-    // Combine sales data with product details
-    const bestSellingProducts = topProducts
-      .map(sales => {
-        const product = productsMap[sales.product_id]
-        if (!product) return null
-
-        // Determine stock status
-        const stockStatus = (product.stock > 0 && product.status !== 'out_of_stock') 
-          ? 'Stock' 
-          : 'Stock out'
-        const stockStatusColor = stockStatus === 'Stock' ? 'green' : 'red'
-
-        return {
-          id: product.id,
-          name: product.name,
-          image_url: product.image_url,
-          price: parseFloat(product.price || 0),
-          priceFormatted: new Intl.NumberFormat('en-US', {
-            style: 'currency',
-            currency: 'USD',
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-          }).format(product.price || 0),
-          totalOrder: sales.total_orders,
-          totalQuantity: sales.total_quantity,
-          stock: product.stock,
-          stockStatus,
-          stockStatusColor,
-          status: product.status
-        }
-      })
-      .filter(p => p !== null) // Remove null entries (products that were deleted)
-
-    res.json({
-      products: bestSellingProducts,
-      period,
-      periodLabel: period === 'all' 
-        ? 'All Time' 
-        : period === '7days' 
-          ? 'Last 7 Days' 
-          : period === '30days' 
-            ? 'Last 30 Days' 
-            : 'Last 90 Days',
-      total: bestSellingProducts.length,
-      limit: parseInt(limit)
-    })
-  } catch (error) {
-    console.error('Best selling products error:', error)
     res.status(500).json({ error: error.message })
   }
 })
