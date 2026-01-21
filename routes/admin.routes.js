@@ -1,6 +1,14 @@
 import express from 'express'
 import { supabase, supabaseAdmin } from '../config/supabase.js'
 import { validateEmail } from '../utils/validation.js'
+import {
+  validateProductData,
+  generateSlug,
+  calculateDiscount,
+  determineStockStatus,
+  validateCategories,
+  ALLOWED_CATEGORIES
+} from '../utils/productValidation.js'
 
 const router = express.Router()
 
@@ -1218,82 +1226,265 @@ router.get('/products/:id', checkAdmin, async (req, res) => {
 // Create new product
 router.post('/products', checkAdmin, async (req, res) => {
   try {
+    // Extract all fields from request body (map frontend field names)
     const {
       name,
-      description,
-      price,
-      image_url,
-      category,
-      subcategory,
-      stock = 0,
-      unit = 'piece',
-      weight,
-      is_organic = false,
-      is_fresh = true,
-      expiry_date,
-      brand,
       sku,
-      status = 'active'
+      currentPrice,
+      originalPrice,
+      description,
+      shortDescription,
+      categories,
+      mainImage,
+      additionalImages,
+      stockQuantity,
+      slug,
+      badge = 'none',
+      discountPercentage,
+      initialRating = 0,
+      initialReviewCount = 0,
+      stockStatus,
+      productStatus = 'Draft',
+      featured = false,
+      weight,
+      dimensions,
+      tags = [],
+      // Form action override (from 'Save as Draft' or 'Publish' buttons)
+      action
     } = req.body
 
-    // Validation
-    if (!name || !price || !category) {
-      return res.status(400).json({ 
-        error: 'Missing required fields',
-        required: ['name', 'price', 'category']
+    // Prepare data object for validation
+    const productData = {
+      name,
+      sku,
+      currentPrice,
+      originalPrice,
+      description,
+      shortDescription,
+      categories,
+      mainImage,
+      additionalImages,
+      stockQuantity,
+      slug,
+      badge,
+      discountPercentage,
+      initialRating,
+      initialReviewCount,
+      stockStatus,
+      productStatus,
+      featured,
+      weight,
+      dimensions,
+      tags
+    }
+
+    // Validate product data
+    const validation = validateProductData(productData)
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        errors: validation.errors
       })
     }
 
-    if (price < 0) {
-      return res.status(400).json({ error: 'Price must be greater than or equal to 0' })
+    // Generate slug if not provided
+    let finalSlug = slug
+    if (!finalSlug || finalSlug.trim().length === 0) {
+      finalSlug = generateSlug(name)
+    } else {
+      finalSlug = generateSlug(finalSlug) // Normalize provided slug
     }
 
-    if (stock < 0) {
-      return res.status(400).json({ error: 'Stock must be greater than or equal to 0' })
+    // Ensure slug uniqueness
+    let slugCounter = 1
+    let uniqueSlug = finalSlug
+    while (true) {
+      const { data: existingProduct } = await supabaseAdmin
+        .from('products')
+        .select('id')
+        .eq('slug', uniqueSlug)
+        .single()
+
+      if (!existingProduct) {
+        break // Slug is unique
+      }
+
+      uniqueSlug = `${finalSlug}-${slugCounter}`
+      slugCounter++
     }
 
-    if (!['active', 'inactive', 'out_of_stock'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status. Must be: active, inactive, or out_of_stock' })
+    // Check SKU uniqueness
+    const { data: existingSku } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('sku', sku)
+      .single()
+
+    if (existingSku) {
+      return res.status(409).json({
+        success: false,
+        error: 'SKU already exists'
+      })
     }
 
-    const productData = {
-      name,
-      description,
-      price: parseFloat(price),
-      image_url,
-      category,
-      subcategory,
-      stock: parseInt(stock),
-      unit,
-      weight: weight ? parseFloat(weight) : null,
-      is_organic: Boolean(is_organic),
-      is_fresh: Boolean(is_fresh),
-      expiry_date: expiry_date || null,
-      brand: brand || null,
-      sku: sku || null,
-      status,
+    // Calculate discount percentage if not provided but both prices exist
+    let finalDiscountPercentage = discountPercentage
+    if (originalPrice && currentPrice && !finalDiscountPercentage) {
+      finalDiscountPercentage = calculateDiscount(originalPrice, currentPrice)
+    }
+
+    // Auto-determine stock status if not provided
+    let finalStockStatus = stockStatus
+    if (!finalStockStatus) {
+      finalStockStatus = determineStockStatus(stockQuantity)
+    }
+
+    // Handle status override from form action
+    let finalProductStatus = productStatus
+    if (action === 'publish' || action === 'Publish') {
+      finalProductStatus = 'Active'
+    } else if (action === 'draft' || action === 'Save as Draft') {
+      finalProductStatus = 'Draft'
+    }
+
+    // Prepare product data for database insertion
+    const dbProductData = {
+      name: name.trim(),
+      sku: sku.trim(),
+      price: parseFloat(currentPrice), // Keep price for backward compatibility
+      current_price: parseFloat(currentPrice),
+      original_price: originalPrice ? parseFloat(originalPrice) : null,
+      discount_percentage: finalDiscountPercentage,
+      description: description.trim(),
+      short_description: shortDescription ? shortDescription.trim() : null,
+      slug: uniqueSlug,
+      badge: badge || 'none',
+      main_image: mainImage.trim(),
+      additional_images: additionalImages && Array.isArray(additionalImages) ? additionalImages : [],
+      stock: parseInt(stockQuantity),
+      stock_status: finalStockStatus,
+      product_status: finalProductStatus,
+      rating: initialRating ? parseFloat(initialRating) : 0,
+      review_count: initialReviewCount ? parseInt(initialReviewCount) : 0,
+      featured: Boolean(featured),
+      weight: weight ? weight.trim() : null,
+      dimensions: dimensions ? dimensions.trim() : null,
+      tags: tags && Array.isArray(tags) ? tags : [],
+      // Keep backward compatibility fields
+      image_url: mainImage.trim(), // Map to old field
+      status: finalProductStatus === 'Active' ? 'active' : 'inactive', // Map to old status
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }
 
-    const { data, error } = await supabaseAdmin
+    // Insert product into database
+    const { data: product, error: productError } = await supabaseAdmin
       .from('products')
-      .insert([productData])
+      .insert([dbProductData])
       .select()
       .single()
 
-    if (error) {
-      console.error('Product creation error:', error)
-      return res.status(400).json({ error: error.message })
+    if (productError) {
+      console.error('Product creation error:', productError)
+
+      // Handle unique constraint violations
+      if (productError.code === '23505') {
+        if (productError.message.includes('slug')) {
+          return res.status(409).json({
+            success: false,
+            error: 'Slug already exists'
+          })
+        }
+        if (productError.message.includes('sku')) {
+          return res.status(409).json({
+            success: false,
+            error: 'SKU already exists'
+          })
+        }
+      }
+
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create product',
+        details: productError.message
+      })
+    }
+
+    // Insert categories into junction table
+    if (categories && Array.isArray(categories) && categories.length > 0) {
+      const categoryInserts = categories.map(category => ({
+        product_id: product.id,
+        category: category.trim()
+      }))
+
+      const { error: categoryError } = await supabaseAdmin
+        .from('product_categories')
+        .insert(categoryInserts)
+
+      if (categoryError) {
+        console.error('Category insertion error:', categoryError)
+        // Note: Product is already created, but categories failed
+        // In production, consider transaction rollback or cleanup
+        return res.status(500).json({
+          success: false,
+          error: 'Product created but failed to add categories',
+          details: categoryError.message
+        })
+      }
+    }
+
+    // Fetch product with categories for response
+    const { data: productWithCategories } = await supabaseAdmin
+      .from('products')
+      .select(`
+        *,
+        product_categories (
+          category
+        )
+      `)
+      .eq('id', product.id)
+      .single()
+
+    // Format response to match specification
+    const responseData = {
+      id: product.id,
+      name: product.name,
+      slug: product.slug,
+      sku: product.sku,
+      price: parseFloat(product.current_price || product.price),
+      original_price: product.original_price ? parseFloat(product.original_price) : null,
+      discount_percentage: product.discount_percentage ? parseFloat(product.discount_percentage) : null,
+      description: product.description,
+      short_description: product.short_description,
+      categories: productWithCategories?.product_categories?.map(pc => pc.category) || categories || [],
+      badge: product.badge,
+      main_image: product.main_image,
+      additional_images: product.additional_images || [],
+      rating: product.rating ? parseFloat(product.rating) : 0,
+      review_count: product.review_count || 0,
+      stock: product.stock,
+      stock_status: product.stock_status,
+      status: product.product_status.toLowerCase(),
+      featured: product.featured,
+      weight: product.weight,
+      dimensions: product.dimensions,
+      tags: product.tags || [],
+      created_at: product.created_at,
+      updated_at: product.updated_at
     }
 
     res.status(201).json({
+      success: true,
       message: 'Product created successfully',
-      product: data
+      data: responseData
     })
   } catch (error) {
     console.error('Create product error:', error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Internal server error'
+    })
   }
 })
 

@@ -9,23 +9,44 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- PRODUCTS TABLE
 -- ============================================
 -- Products table for grocery items and fresh fruits
+-- NOTE: This schema includes both legacy and new fields
+-- Run migrations/add_product_fields.sql to add new fields to existing database
 CREATE TABLE IF NOT EXISTS products (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   description TEXT,
-  price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
-  image_url TEXT,
+  price DECIMAL(10, 2) NOT NULL CHECK (price >= 0), -- Legacy field, kept for backward compatibility
+  image_url TEXT, -- Legacy field, migrated to main_image
+  
+  -- New fields (added via migration)
+  slug VARCHAR(255) UNIQUE, -- URL-friendly identifier, auto-generated from name
+  current_price DECIMAL(10, 2), -- Current selling price (alias for price)
+  original_price DECIMAL(10, 2), -- Original price before discount
+  discount_percentage DECIMAL(5, 2) CHECK (discount_percentage >= 0 AND discount_percentage <= 100),
+  short_description TEXT, -- Brief description for product cards/listing
+  badge VARCHAR(20) DEFAULT 'none' CHECK (badge IN ('none', 'new', 'hot', 'sell-25', 'sale')),
+  main_image TEXT, -- Primary product image URL (migrated from image_url)
+  additional_images JSONB DEFAULT '[]'::jsonb, -- Array of additional image URLs (max 4)
+  rating DECIMAL(3, 2) DEFAULT 0 CHECK (rating >= 0 AND rating <= 5),
+  review_count INTEGER DEFAULT 0 CHECK (review_count >= 0),
+  stock_status VARCHAR(20) DEFAULT 'In Stock' CHECK (stock_status IN ('In Stock', 'Out of Stock', 'Low Stock')),
+  product_status VARCHAR(20) DEFAULT 'Draft' CHECK (product_status IN ('Active', 'Draft', 'Archived')),
+  featured BOOLEAN DEFAULT false, -- Whether product is featured
+  dimensions VARCHAR(100), -- Product dimensions (e.g., "10x10x5 cm")
+  tags JSONB DEFAULT '[]'::jsonb, -- Array of product tags for search/filtering
+  
+  -- Legacy fields (kept for backward compatibility)
   category VARCHAR(100) NOT NULL, -- e.g., 'fruits', 'vegetables', 'dairy', 'meat', etc.
   subcategory VARCHAR(100), -- e.g., 'fresh-fruits', 'frozen', 'organic', etc.
   stock INTEGER DEFAULT 0 CHECK (stock >= 0),
   unit VARCHAR(50) DEFAULT 'piece', -- e.g., 'kg', 'piece', 'bunch', 'pack'
-  weight DECIMAL(8, 2), -- Weight in kg (useful for fruits/vegetables)
+  weight DECIMAL(8, 2), -- Weight in kg (useful for fruits/vegetables) - also stored as string in new weight field
   is_organic BOOLEAN DEFAULT false,
   is_fresh BOOLEAN DEFAULT true, -- Indicates if it's a fresh produce item
   expiry_date DATE, -- For fresh items
   brand VARCHAR(100),
   sku VARCHAR(100) UNIQUE, -- Stock Keeping Unit
-  status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'out_of_stock')),
+  status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'out_of_stock')), -- Legacy status, use product_status for new logic
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -34,6 +55,44 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
 CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at);
+CREATE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_products_product_status ON products(product_status);
+CREATE INDEX IF NOT EXISTS idx_products_stock_status ON products(stock_status);
+CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured) WHERE featured = true;
+CREATE INDEX IF NOT EXISTS idx_products_rating ON products(rating);
+
+-- ============================================
+-- PRODUCT CATEGORIES TABLE (Junction Table)
+-- ============================================
+-- Junction table for product-category many-to-many relationship
+-- Allows products to have multiple categories
+-- NOTE: Run migrations/create_product_categories.sql to create this table
+CREATE TABLE IF NOT EXISTS product_categories (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  product_id UUID REFERENCES products(id) ON DELETE CASCADE NOT NULL,
+  category VARCHAR(50) NOT NULL CHECK (category IN (
+    'Vegetables', 
+    'Fruits', 
+    'Meat', 
+    'Fish', 
+    'Beverages', 
+    'Juices', 
+    'Dairy', 
+    'Snacks', 
+    'Breakfast', 
+    'Health', 
+    'Bakery', 
+    'Grains', 
+    'Organic', 
+    'Others', 
+    'Uncategorized'
+  )),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(product_id, category)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_categories_product_id ON product_categories(product_id);
+CREATE INDEX IF NOT EXISTS idx_product_categories_category ON product_categories(category);
 
 -- ============================================
 -- PROFILES TABLE
@@ -206,6 +265,7 @@ ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_categories ENABLE ROW LEVEL SECURITY;
 
 -- Drop existing policies if they exist (for idempotency)
 DROP POLICY IF EXISTS "Products are viewable by everyone" ON products;
@@ -219,6 +279,9 @@ DROP POLICY IF EXISTS "Admins can view all orders" ON orders;
 DROP POLICY IF EXISTS "Admins can update all orders" ON orders;
 DROP POLICY IF EXISTS "Users can view own order items" ON order_items;
 DROP POLICY IF EXISTS "Admins can view all order items" ON order_items;
+DROP POLICY IF EXISTS "Users can view categories for active products" ON product_categories;
+DROP POLICY IF EXISTS "Admins can view all categories" ON product_categories;
+DROP POLICY IF EXISTS "Admins can manage all categories" ON product_categories;
 
 -- Products: Anyone can read active products, only admins can modify
 CREATE POLICY "Products are viewable by everyone"
@@ -272,6 +335,25 @@ CREATE POLICY "Users can view own order items"
 
 CREATE POLICY "Admins can view all order items"
   ON order_items FOR SELECT
+  USING (is_admin(auth.uid()));
+
+-- Product categories: Users can view categories for active products
+CREATE POLICY "Users can view categories for active products"
+  ON product_categories FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM products
+      WHERE products.id = product_categories.product_id
+      AND products.product_status = 'Active'
+    )
+  );
+
+CREATE POLICY "Admins can view all categories"
+  ON product_categories FOR SELECT
+  USING (is_admin(auth.uid()));
+
+CREATE POLICY "Admins can manage all categories"
+  ON product_categories FOR ALL
   USING (is_admin(auth.uid()));
 
 -- ============================================
