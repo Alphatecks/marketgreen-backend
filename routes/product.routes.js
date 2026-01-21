@@ -3,19 +3,65 @@ import { supabase } from '../config/supabase.js'
 
 const router = express.Router()
 
-// Get all products
+// Get all products (public endpoint - no auth required)
 router.get('/', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const {
+      badge,
+      category,
+      featured,
+      search,
+      limit = 50,
+      offset = 0,
+      sortBy = 'created_at',
+      sortOrder = 'desc'
+    } = req.query
+
+    // Build query - only show active products for public
+    let query = supabase
       .from('products')
-      .select('*')
-      .order('created_at', { ascending: false })
+      .select('*', { count: 'exact' })
+      .eq('product_status', 'Active') // Only show active products
+      .eq('status', 'active') // Legacy status check
+      .order(sortBy, { ascending: sortOrder === 'asc' })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filters
+    if (badge) {
+      // Support multiple badges (comma-separated) or single badge
+      const badges = badge.split(',').map(b => b.trim())
+      if (badges.length === 1) {
+        query = query.eq('badge', badges[0])
+      } else {
+        query = query.in('badge', badges)
+      }
+    }
+
+    if (category) {
+      query = query.eq('category', category)
+    }
+
+    if (featured === 'true' || featured === true) {
+      query = query.eq('featured', true)
+    }
+
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,short_description.ilike.%${search}%`)
+    }
+
+    const { data, error, count } = await query
 
     if (error) {
       return res.status(400).json({ error: error.message })
     }
 
-    res.json(data)
+    res.json({
+      products: data || [],
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
