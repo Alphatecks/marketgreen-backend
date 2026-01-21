@@ -153,6 +153,27 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================
+-- FUNCTION: Check if user is admin (prevents RLS recursion)
+-- ============================================
+-- SECURITY DEFINER allows this function to bypass RLS policies
+-- This prevents infinite recursion when checking admin status in RLS policies
+CREATE OR REPLACE FUNCTION is_admin(user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 
+    FROM public.profiles 
+    WHERE profiles.id = user_id 
+    AND profiles.role = 'admin'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+
+-- Grant execute permission to authenticated users
+GRANT EXECUTE ON FUNCTION is_admin(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION is_admin(UUID) TO anon;
+
+-- ============================================
 -- UPDATE RLS POLICIES FOR PROFILES
 -- ============================================
 
@@ -161,6 +182,7 @@ DROP POLICY IF EXISTS "Users can view own profile" ON profiles;
 DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
 DROP POLICY IF EXISTS "Users can insert own profile" ON profiles;
 DROP POLICY IF EXISTS "Admins can view all profiles" ON profiles;
+DROP POLICY IF EXISTS "Admins can update all profiles" ON profiles;
 
 -- Users can view their own profile
 CREATE POLICY "Users can view own profile"
@@ -178,27 +200,15 @@ CREATE POLICY "Users can insert own profile"
   ON profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
--- Admins can view all profiles
+-- Admins can view all profiles (using function to avoid recursion)
 CREATE POLICY "Admins can view all profiles"
   ON profiles FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
--- Admins can update all profiles
+-- Admins can update all profiles (using function to avoid recursion)
 CREATE POLICY "Admins can update all profiles"
   ON profiles FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
 -- ============================================
 -- HELPER VIEW: User profile with auth data

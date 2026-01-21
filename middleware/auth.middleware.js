@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabase.js'
+import { supabase, supabaseAdmin } from '../config/supabase.js'
 
 /**
  * Middleware to authenticate requests using Supabase JWT token
@@ -27,7 +27,7 @@ export const authenticate = async (req, res, next) => {
 
 /**
  * Middleware to check if user is admin
- * Assumes you have a role field in your profiles table
+ * Uses admin client to bypass RLS and avoid infinite recursion
  */
 export const isAdmin = async (req, res, next) => {
   try {
@@ -35,7 +35,16 @@ export const isAdmin = async (req, res, next) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
 
-    const { data: profile, error } = await supabase
+    // Use admin client to bypass RLS (avoids infinite recursion)
+    // The admin client bypasses RLS policies, preventing the circular dependency
+    if (!supabaseAdmin) {
+      return res.status(500).json({ 
+        error: 'Service role key not configured',
+        message: 'SUPABASE_SERVICE_ROLE_KEY must be set to check admin status'
+      })
+    }
+
+    const { data: profile, error } = await supabaseAdmin
       .from('profiles')
       .select('role')
       .eq('id', req.user.id)

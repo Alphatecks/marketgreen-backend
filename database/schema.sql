@@ -177,6 +177,27 @@ CREATE TRIGGER set_order_number
   EXECUTE FUNCTION generate_order_number();
 
 -- ============================================
+-- FUNCTION: Check if user is admin (prevents RLS recursion)
+-- ============================================
+-- SECURITY DEFINER allows this function to bypass RLS policies
+-- This prevents infinite recursion when checking admin status in RLS policies
+CREATE OR REPLACE FUNCTION is_admin(user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 
+    FROM public.profiles 
+    WHERE profiles.id = user_id 
+    AND profiles.role = 'admin'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+
+-- Grant execute permission to authenticated users
+GRANT EXECUTE ON FUNCTION is_admin(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION is_admin(UUID) TO anon;
+
+-- ============================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- ============================================
 
@@ -186,6 +207,19 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 
+-- Drop existing policies if they exist (for idempotency)
+DROP POLICY IF EXISTS "Products are viewable by everyone" ON products;
+DROP POLICY IF EXISTS "Products are editable by admins" ON products;
+DROP POLICY IF EXISTS "Users can view own profile" ON profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
+DROP POLICY IF EXISTS "Admins can view all profiles" ON profiles;
+DROP POLICY IF EXISTS "Users can view own orders" ON orders;
+DROP POLICY IF EXISTS "Users can create own orders" ON orders;
+DROP POLICY IF EXISTS "Admins can view all orders" ON orders;
+DROP POLICY IF EXISTS "Admins can update all orders" ON orders;
+DROP POLICY IF EXISTS "Users can view own order items" ON order_items;
+DROP POLICY IF EXISTS "Admins can view all order items" ON order_items;
+
 -- Products: Anyone can read active products, only admins can modify
 CREATE POLICY "Products are viewable by everyone"
   ON products FOR SELECT
@@ -193,13 +227,7 @@ CREATE POLICY "Products are viewable by everyone"
 
 CREATE POLICY "Products are editable by admins"
   ON products FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
 -- Profiles: Users can view their own profile, admins can view all
 CREATE POLICY "Users can view own profile"
@@ -212,13 +240,7 @@ CREATE POLICY "Users can update own profile"
 
 CREATE POLICY "Admins can view all profiles"
   ON profiles FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
 -- Orders: Users can view their own orders
 CREATE POLICY "Users can view own orders"
@@ -231,23 +253,11 @@ CREATE POLICY "Users can create own orders"
 
 CREATE POLICY "Admins can view all orders"
   ON orders FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
 CREATE POLICY "Admins can update all orders"
   ON orders FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
 -- Order items: Users can view items from their orders
 CREATE POLICY "Users can view own order items"
@@ -262,13 +272,7 @@ CREATE POLICY "Users can view own order items"
 
 CREATE POLICY "Admins can view all order items"
   ON order_items FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles
-      WHERE profiles.id = auth.uid()
-      AND profiles.role = 'admin'
-    )
-  );
+  USING (is_admin(auth.uid()));
 
 -- ============================================
 -- VIEWS FOR DASHBOARD METRICS (Optional but recommended)
