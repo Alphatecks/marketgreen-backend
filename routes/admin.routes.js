@@ -1368,7 +1368,7 @@ router.post('/products', checkAdmin, async (req, res) => {
       rating: initialRating ? parseFloat(initialRating) : 0,
       review_count: initialReviewCount ? parseInt(initialReviewCount) : 0,
       featured: Boolean(featured),
-      weight: weight ? weight.trim() : null,
+      weight_string: weight ? weight.trim() : null, // Use weight_string for string values like "1kg"
       dimensions: dimensions ? dimensions.trim() : null,
       tags: tags && Array.isArray(tags) ? tags : [],
       // Keep backward compatibility fields
@@ -1467,7 +1467,7 @@ router.post('/products', checkAdmin, async (req, res) => {
       stock_status: product.stock_status,
       status: product.product_status.toLowerCase(),
       featured: product.featured,
-      weight: product.weight,
+      weight: product.weight_string || product.weight, // Use weight_string if available, fallback to legacy weight
       dimensions: product.dimensions,
       tags: product.tags || [],
       created_at: product.created_at,

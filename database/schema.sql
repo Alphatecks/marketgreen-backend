@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS products (
   stock_status VARCHAR(20) DEFAULT 'In Stock' CHECK (stock_status IN ('In Stock', 'Out of Stock', 'Low Stock')),
   product_status VARCHAR(20) DEFAULT 'Draft' CHECK (product_status IN ('Active', 'Draft', 'Archived')),
   featured BOOLEAN DEFAULT false, -- Whether product is featured
+  weight_string VARCHAR(100), -- Product weight as string (e.g., "1kg", "500g")
   dimensions VARCHAR(100), -- Product dimensions (e.g., "10x10x5 cm")
   tags JSONB DEFAULT '[]'::jsonb, -- Array of product tags for search/filtering
   

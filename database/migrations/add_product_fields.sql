@@ -72,6 +72,10 @@ WHERE product_status IS NULL;
 ALTER TABLE products 
 ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT false;
 
+-- Add weight_string column (for string weight like "1kg", "500g")
+ALTER TABLE products 
+ADD COLUMN IF NOT EXISTS weight_string VARCHAR(100);
+
 -- Add dimensions column
 ALTER TABLE products 
 ADD COLUMN IF NOT EXISTS dimensions VARCHAR(100);
