@@ -207,6 +207,26 @@ router.post('/login', async (req, res) => {
         }
 
         try {
+          // Verify Supabase connection before attempting to create user
+          // Use a lightweight check that doesn't require specific permissions
+          const { data: healthCheck, error: healthError } = await supabaseAdmin
+            .from('profiles')
+            .select('count')
+            .limit(1)
+          
+          if (healthError && !healthError.message.includes('permission') && !healthError.message.includes('relation')) {
+            console.error('Supabase connection error:', healthError)
+            return res.status(500).json({
+              error: 'Failed to connect to database',
+              message: healthError.message || 'Unable to reach Supabase. Please check your SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY configuration.',
+              details: process.env.NODE_ENV === 'development' ? {
+                hasUrl: !!process.env.SUPABASE_URL,
+                hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+                urlPrefix: process.env.SUPABASE_URL?.substring(0, 30) || 'not set'
+              } : undefined
+            })
+          }
+
           // Create user using admin client (bypasses email confirmation)
           const { data: newUserData, error: createError } = await supabaseAdmin.auth.admin.createUser({
             email: STATIC_ADMIN_EMAIL,
@@ -222,7 +242,8 @@ router.post('/login', async (req, res) => {
             console.error('Error creating admin user:', createError)
             return res.status(500).json({
               error: 'Failed to create admin user',
-              message: createError.message
+              message: createError.message || 'Unknown error occurred while creating user',
+              code: createError.status || createError.code
             })
           }
 
@@ -284,9 +305,32 @@ router.post('/login', async (req, res) => {
           })
         } catch (createUserError) {
           console.error('Error in admin user creation:', createUserError)
+          
+          // Handle specific error types
+          let errorMessage = createUserError.message || 'Unknown error occurred'
+          let errorDetails = {}
+          
+          if (errorMessage.includes('fetch failed') || errorMessage.includes('NetworkError')) {
+            errorMessage = 'Network error: Unable to connect to Supabase. Please check your internet connection and Supabase configuration.'
+            errorDetails = {
+              suggestion: 'Verify that SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are correctly set in your environment variables.',
+              hasUrl: !!process.env.SUPABASE_URL,
+              hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY
+            }
+          } else if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
+            errorMessage = 'Connection refused: Unable to reach Supabase server. Please verify your SUPABASE_URL.'
+            errorDetails = {
+              urlPrefix: process.env.SUPABASE_URL?.substring(0, 30) || 'not set'
+            }
+          } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+            errorMessage = 'Authentication failed: Invalid SUPABASE_SERVICE_ROLE_KEY. Please verify your service role key.'
+          }
+          
           return res.status(500).json({
             error: 'Failed to create admin user',
-            message: createUserError.message
+            message: errorMessage,
+            ...(Object.keys(errorDetails).length > 0 && { details: errorDetails }),
+            ...(process.env.NODE_ENV === 'development' && { stack: createUserError.stack })
           })
         }
       }
