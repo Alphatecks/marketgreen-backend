@@ -19,20 +19,29 @@ const checkAdmin = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid or expired token' })
     }
 
-    // Check if user is admin
-    const { data: profile, error: profileError } = await supabase
+    // Check if user is admin using admin client to bypass RLS
+    const clientToUse = supabaseAdmin || supabase
+    const { data: profile, error: profileError } = await clientToUse
       .from('profiles')
       .select('role')
       .eq('id', user.id)
       .single()
 
     if (profileError || !profile || profile.role !== 'admin') {
+      console.error('Admin check failed:', {
+        userId: user.id,
+        email: user.email,
+        profileError: profileError?.message,
+        profileRole: profile?.role,
+        hasProfile: !!profile
+      })
       return res.status(403).json({ error: 'Access denied. Admin role required.' })
     }
 
     req.user = user
     next()
   } catch (error) {
+    console.error('checkAdmin middleware error:', error)
     res.status(500).json({ error: error.message })
   }
 }
