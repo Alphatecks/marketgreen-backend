@@ -882,6 +882,8 @@ router.get('/products', checkAdmin, async (req, res) => {
     const { 
       category, 
       status, 
+      productStatus,
+      badge,
       search,
       limit = 50, 
       offset = 0,
@@ -902,6 +904,20 @@ router.get('/products', checkAdmin, async (req, res) => {
 
     if (status) {
       query = query.eq('status', status)
+    }
+
+    if (productStatus) {
+      query = query.eq('product_status', productStatus)
+    }
+
+    if (badge) {
+      // Support multiple badges (comma-separated) or single badge
+      const badges = badge.split(',').map(b => b.trim())
+      if (badges.length === 1) {
+        query = query.eq('badge', badges[0])
+      } else {
+        query = query.in('badge', badges)
+      }
     }
 
     if (search) {
