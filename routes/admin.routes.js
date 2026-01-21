@@ -630,4 +630,140 @@ router.get('/dashboard/sales-breakdown', checkAdmin, async (req, res) => {
   }
 })
 
+// Format date to "DD MMM | HH:mm am/pm" format
+const formatOrderDate = (dateString) => {
+  const date = new Date(dateString)
+  const day = date.getDate().toString().padStart(2, '0')
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const month = months[date.getMonth()]
+  
+  let hours = date.getHours()
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const ampm = hours >= 12 ? 'pm' : 'am'
+  hours = hours % 12
+  hours = hours ? hours : 12 // the hour '0' should be '12'
+  const formattedHours = hours.toString().padStart(2, '0')
+  
+  return `${day} ${month} | ${formattedHours}:${minutes} ${ampm}`
+}
+
+// Get transactions list (formatted for UI)
+router.get('/transactions', checkAdmin, async (req, res) => {
+  try {
+    const { 
+      status, 
+      payment_status, 
+      limit = 50, 
+      offset = 0,
+      startDate,
+      endDate
+    } = req.query
+
+    // Build query
+    let query = supabase
+      .from('orders')
+      .select(`
+        id,
+        order_number,
+        total_amount,
+        payment_status,
+        status,
+        created_at,
+        user_id
+      `, { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filters
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    if (payment_status) {
+      query = query.eq('payment_status', payment_status)
+    }
+
+    if (startDate) {
+      query = query.gte('created_at', startDate)
+    }
+
+    if (endDate) {
+      query = query.lte('created_at', endDate)
+    }
+
+    const { data, error, count } = await query
+
+    if (error) {
+      console.error('Error fetching transactions:', error)
+      return res.status(500).json({ error: error.message })
+    }
+
+    // Format transactions to match UI structure
+    const transactions = (data || []).map((order, index) => {
+      // Extract customer ID from order_number (e.g., "ORD-2024-001234" -> "#1234")
+      // The UI shows customer IDs like #6545, #5412, etc. - these appear to be extracted from order numbers
+      let customerId = order.order_number || order.id.substring(0, 8)
+      
+      if (order.order_number) {
+        // Extract numeric part from order number (e.g., "ORD-2024-001234" -> "1234")
+        const match = order.order_number.match(/\d+/g)
+        if (match && match.length > 0) {
+          // Take the last sequence of digits (usually the order sequence number)
+          const digits = match[match.length - 1]
+          customerId = `#${digits.length > 4 ? digits.slice(-4) : digits}`
+        } else {
+          // Fallback: use last 4 characters if no digits found
+          customerId = `#${order.order_number.slice(-4)}`
+        }
+      } else {
+        // Fallback: use first 4 characters of UUID if no order_number
+        customerId = `#${order.id.substring(0, 4)}`
+      }
+
+      // Map payment_status to display status
+      const statusMap = {
+        'paid': { label: 'Paid', color: 'green' },
+        'pending': { label: 'Pending', color: 'orange' },
+        'failed': { label: 'Failed', color: 'red' },
+        'refunded': { label: 'Refunded', color: 'grey' }
+      }
+
+      const paymentStatus = order.payment_status || 'pending'
+      const statusInfo = statusMap[paymentStatus] || statusMap['pending']
+
+      return {
+        no: parseInt(offset) + index + 1,
+        id: order.id,
+        customerId: customerId,
+        orderNumber: order.order_number,
+        orderDate: formatOrderDate(order.created_at),
+        status: statusInfo.label,
+        statusColor: statusInfo.color,
+        paymentStatus: paymentStatus,
+        orderStatus: order.status,
+        amount: parseFloat(order.total_amount || 0),
+        amountFormatted: new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2
+        }).format(order.total_amount || 0),
+        userId: order.user_id,
+        createdAt: order.created_at
+      }
+    })
+
+    res.json({
+      transactions,
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Transactions error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
