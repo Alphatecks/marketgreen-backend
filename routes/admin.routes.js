@@ -1172,6 +1172,23 @@ router.get('/products/best-selling', checkAdmin, async (req, res) => {
       return res.status(500).json({ error: ordersError.message })
     }
 
+    if (!orders || orders.length === 0) {
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No orders found matching the criteria'
+      })
+    }
+
     // Aggregate product sales from order items
     const productSales = {}
 
@@ -1181,10 +1198,18 @@ router.get('/products/best-selling', checkAdmin, async (req, res) => {
       }
 
       order.items.forEach(item => {
-        const productId = item.product_id || item.id
-        if (!productId) return
+        // Try multiple possible field names for product ID
+        const productId = item.product_id || item.id || item.productId
+        if (!productId) {
+          console.warn('Order item missing product ID:', item)
+          return
+        }
 
         const quantity = parseInt(item.quantity || 1)
+        if (isNaN(quantity) || quantity <= 0) {
+          console.warn('Invalid quantity in order item:', item)
+          return
+        }
 
         if (!productSales[productId]) {
           productSales[productId] = {
@@ -1221,24 +1246,85 @@ router.get('/products/best-selling', checkAdmin, async (req, res) => {
     const topProducts = filteredProducts.slice(0, parseInt(limit))
 
     // Fetch product details for top products
-    const productIds = topProducts.map(p => p.product_id)
+    const productIds = topProducts.map(p => p.product_id).filter(id => id) // Filter out null/undefined
     
     if (productIds.length === 0) {
       return res.json({
         products: [],
         period,
-        total: 0
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No products found matching the criteria'
+      })
+    }
+
+    // Validate UUIDs format (basic check)
+    const validProductIds = productIds.filter(id => {
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      return uuidRegex.test(id)
+    })
+
+    if (validProductIds.length === 0) {
+      console.warn('No valid product IDs found:', productIds)
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No valid product IDs found in orders'
       })
     }
 
     const { data: products, error: productsError } = await supabaseAdmin
       .from('products')
       .select('id, name, image_url, price, stock, status')
-      .in('id', productIds)
+      .in('id', validProductIds)
 
     if (productsError) {
       console.error('Error fetching products:', productsError)
-      return res.status(500).json({ error: productsError.message })
+      return res.status(500).json({ 
+        error: 'Failed to fetch product details',
+        details: productsError.message 
+      })
+    }
+
+    // Log if some products are missing
+    if (!products || products.length === 0) {
+      console.warn('No products found for IDs:', validProductIds)
+      return res.json({
+        products: [],
+        period,
+        periodLabel: period === 'all' 
+          ? 'All Time' 
+          : period === '7days' 
+            ? 'Last 7 Days' 
+            : period === '30days' 
+              ? 'Last 30 Days' 
+              : 'Last 90 Days',
+        total: 0,
+        limit: parseInt(limit),
+        message: 'No products found in database for the order items'
+      })
+    }
+
+    if (products.length < validProductIds.length) {
+      const foundIds = products.map(p => p.id)
+      const missingIds = validProductIds.filter(id => !foundIds.includes(id))
+      console.warn('Some products not found:', missingIds)
     }
 
     // Create a map for quick product lookup
