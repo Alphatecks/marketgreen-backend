@@ -197,13 +197,98 @@ router.post('/login', async (req, res) => {
           }
         })
       } else {
-        // Static admin credentials correct but no Supabase session
-        // Return success but note that they may need to be created in Supabase
-        return res.status(401).json({
-          error: 'Admin account needs to be created in Supabase first',
-          message: 'Please ensure the admin account exists in the authentication system.',
-          staticAdmin: true
-        })
+        // Static admin credentials correct but user doesn't exist in Supabase
+        // Try to create the user using admin client
+        if (!supabaseAdmin) {
+          return res.status(500).json({
+            error: 'Service role key not configured',
+            message: 'Cannot create admin user. Please configure SUPABASE_SERVICE_ROLE_KEY in environment variables.'
+          })
+        }
+
+        try {
+          // Create user using admin client (bypasses email confirmation)
+          const { data: newUserData, error: createError } = await supabaseAdmin.auth.admin.createUser({
+            email: STATIC_ADMIN_EMAIL,
+            password: STATIC_ADMIN_PASSWORD,
+            email_confirm: true, // Auto-confirm email
+            user_metadata: {
+              username: 'admin',
+              role: 'admin'
+            }
+          })
+
+          if (createError) {
+            console.error('Error creating admin user:', createError)
+            return res.status(500).json({
+              error: 'Failed to create admin user',
+              message: createError.message
+            })
+          }
+
+          if (!newUserData?.user) {
+            return res.status(500).json({
+              error: 'Failed to create admin user',
+              message: 'User creation returned no data'
+            })
+          }
+
+          // Create profile with admin role
+          const { error: profileError } = await supabaseAdmin
+            .from('profiles')
+            .insert({
+              id: newUserData.user.id,
+              email: STATIC_ADMIN_EMAIL,
+              username: 'admin',
+              role: 'admin',
+              full_name: 'Admin',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+
+          if (profileError) {
+            console.error('Error creating admin profile:', profileError)
+            // Continue anyway, profile might be created by trigger
+          }
+
+          // Now login with the newly created user
+          const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
+            email: STATIC_ADMIN_EMAIL,
+            password: STATIC_ADMIN_PASSWORD
+          })
+
+          if (loginError || !loginData?.session) {
+            return res.status(500).json({
+              error: 'User created but login failed',
+              message: 'Please try logging in again.'
+            })
+          }
+
+          return res.json({
+            message: 'Admin account created and login successful',
+            user: {
+              id: loginData.user.id,
+              email: STATIC_ADMIN_EMAIL,
+              username: 'admin',
+              full_name: 'Admin',
+              avatar_url: null,
+              role: 'admin',
+              phone: null
+            },
+            session: {
+              access_token: loginData.session.access_token,
+              refresh_token: loginData.session.refresh_token,
+              expires_in: loginData.session.expires_in,
+              token_type: loginData.session.token_type
+            }
+          })
+        } catch (createUserError) {
+          console.error('Error in admin user creation:', createUserError)
+          return res.status(500).json({
+            error: 'Failed to create admin user',
+            message: createUserError.message
+          })
+        }
       }
     }
 
