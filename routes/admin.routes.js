@@ -924,13 +924,34 @@ router.get('/products/:id', checkAdmin, async (req, res) => {
   try {
     const { id } = req.params
 
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid product ID format' })
+    }
+
     const { data, error } = await supabaseAdmin
       .from('products')
       .select('*')
       .eq('id', id)
       .single()
 
+    // Check if product exists
     if (error) {
+      // PGRST116 is Supabase's "no rows returned" error code
+      if (error.code === 'PGRST116' || error.message?.includes('No rows') || error.message?.includes('not found')) {
+        return res.status(404).json({ error: 'Product not found' })
+      }
+      // Log other errors for debugging
+      console.error('Error fetching product:', error)
+      return res.status(500).json({ 
+        error: 'Failed to fetch product',
+        details: error.message 
+      })
+    }
+
+    // Double check data exists (sometimes Supabase returns no error but also no data)
+    if (!data) {
       return res.status(404).json({ error: 'Product not found' })
     }
 
@@ -1029,6 +1050,12 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
     const { id } = req.params
     const updates = req.body
 
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid product ID format' })
+    }
+
     // Validate price if provided
     if (updates.price !== undefined && updates.price < 0) {
       return res.status(400).json({ error: 'Price must be greater than or equal to 0' })
@@ -1075,6 +1102,10 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
 
     if (error) {
       console.error('Product update error:', error)
+      // Check if it's a "not found" error
+      if (error.code === 'PGRST116' || error.message?.includes('No rows') || error.message?.includes('not found')) {
+        return res.status(404).json({ error: 'Product not found' })
+      }
       return res.status(400).json({ error: error.message })
     }
 
@@ -1097,6 +1128,12 @@ router.delete('/products/:id', checkAdmin, async (req, res) => {
   try {
     const { id } = req.params
 
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid product ID format' })
+    }
+
     // Check if product exists
     const { data: product, error: fetchError } = await supabaseAdmin
       .from('products')
@@ -1104,7 +1141,19 @@ router.delete('/products/:id', checkAdmin, async (req, res) => {
       .eq('id', id)
       .single()
 
-    if (fetchError || !product) {
+    if (fetchError) {
+      // Check if it's a "not found" error
+      if (fetchError.code === 'PGRST116' || fetchError.message?.includes('No rows') || fetchError.message?.includes('not found')) {
+        return res.status(404).json({ error: 'Product not found' })
+      }
+      console.error('Error fetching product for deletion:', fetchError)
+      return res.status(500).json({ 
+        error: 'Failed to fetch product',
+        details: fetchError.message 
+      })
+    }
+
+    if (!product) {
       return res.status(404).json({ error: 'Product not found' })
     }
 
