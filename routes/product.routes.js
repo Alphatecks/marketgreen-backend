@@ -151,6 +151,10 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params
     const updates = req.body
 
+    // Extract categories separately (not a column in products table)
+    const categories = updates.categories
+    delete updates.categories
+
     // Convert camelCase field names to snake_case for database
     const dbUpdates = { ...updates }
     
@@ -208,6 +212,12 @@ router.put('/:id', async (req, res) => {
       delete dbUpdates.weightString
     }
 
+    // Update legacy category field if categories are provided
+    if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
+      dbUpdates.category = categories[0] // Set first category for legacy field
+    }
+
+    // Update product
     const { data, error } = await supabase
       .from('products')
       .update(dbUpdates)
@@ -219,7 +229,54 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: error.message })
     }
 
-    res.json(data)
+    // Update product_categories junction table if categories are provided
+    if (categories !== undefined && Array.isArray(categories)) {
+      // Delete existing categories for this product
+      await supabase
+        .from('product_categories')
+        .delete()
+        .eq('product_id', id)
+
+      // Insert new categories
+      if (categories.length > 0) {
+        const categoryInserts = categories
+          .filter(cat => cat && cat.trim()) // Filter out empty/null categories
+          .map(category => ({
+            product_id: id,
+            category: category.trim()
+          }))
+
+        if (categoryInserts.length > 0) {
+          const { error: categoryError } = await supabase
+            .from('product_categories')
+            .insert(categoryInserts)
+
+          if (categoryError) {
+            console.error('Category update error:', categoryError)
+            // Product was updated but categories failed - still return success with warning
+            return res.json({
+              ...data,
+              warning: 'Product updated but categories update failed',
+              categoryError: categoryError.message
+            })
+          }
+        }
+      }
+    }
+
+    // Fetch product with categories for response
+    const { data: productWithCategories } = await supabase
+      .from('products')
+      .select(`
+        *,
+        product_categories (
+          category
+        )
+      `)
+      .eq('id', id)
+      .single()
+
+    res.json(productWithCategories || data)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
