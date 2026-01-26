@@ -146,18 +146,23 @@ router.post('/', async (req, res) => {
       .from('products')
       .insert([dbProduct])
       .select()
-      .single()
 
     if (error) {
       return res.status(400).json({ error: error.message })
     }
+
+    if (!data || data.length === 0) {
+      return res.status(400).json({ error: 'Failed to create product' })
+    }
+
+    const createdProduct = data[0]
 
     // Insert categories into junction table if provided
     if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
       const categoryInserts = categories
         .filter(cat => cat && cat.trim()) // Filter out empty/null categories
         .map(category => ({
-          product_id: data.id,
+          product_id: createdProduct.id,
           category: category.trim()
         }))
 
@@ -170,7 +175,7 @@ router.post('/', async (req, res) => {
           console.error('Category insertion error:', categoryError)
           // Product was created but categories failed - still return success with warning
           return res.status(201).json({
-            ...data,
+            ...createdProduct,
             warning: 'Product created but failed to add categories',
             categoryError: categoryError.message
           })
@@ -179,7 +184,7 @@ router.post('/', async (req, res) => {
     }
 
     // Fetch product with categories for response
-    const { data: productWithCategories } = await supabase
+    const { data: productWithCategories, error: fetchError } = await supabase
       .from('products')
       .select(`
         *,
@@ -187,10 +192,18 @@ router.post('/', async (req, res) => {
           category
         )
       `)
-      .eq('id', data.id)
-      .single()
+      .eq('id', createdProduct.id)
+      .maybeSingle()
 
-    res.status(201).json(productWithCategories || data)
+    if (fetchError || !productWithCategories) {
+      // If fetch fails, return the data from insert
+      if (fetchError) {
+        console.error('Error fetching product with categories:', fetchError)
+      }
+      return res.status(201).json(createdProduct)
+    }
+
+    res.status(201).json(productWithCategories)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -216,11 +229,16 @@ router.put('/:id', async (req, res) => {
       .update(dbUpdates)
       .eq('id', id)
       .select()
-      .single()
 
     if (error) {
       return res.status(400).json({ error: error.message })
     }
+
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
+    const updatedProduct = data[0]
 
     // Update product_categories junction table if categories are provided
     if (categories !== undefined && Array.isArray(categories)) {
@@ -248,7 +266,7 @@ router.put('/:id', async (req, res) => {
             console.error('Category update error:', categoryError)
             // Product was updated but categories failed - still return success with warning
             return res.json({
-              ...data,
+              ...updatedProduct,
               warning: 'Product updated but categories update failed',
               categoryError: categoryError.message
             })
@@ -258,7 +276,7 @@ router.put('/:id', async (req, res) => {
     }
 
     // Fetch product with categories for response
-    const { data: productWithCategories } = await supabase
+    const { data: productWithCategories, error: fetchError } = await supabase
       .from('products')
       .select(`
         *,
@@ -267,9 +285,17 @@ router.put('/:id', async (req, res) => {
         )
       `)
       .eq('id', id)
-      .single()
+      .maybeSingle()
 
-    res.json(productWithCategories || data)
+    if (fetchError || !productWithCategories) {
+      // If fetch fails, return the data from update
+      if (fetchError) {
+        console.error('Error fetching product with categories:', fetchError)
+      }
+      return res.json(updatedProduct)
+    }
+
+    res.json(productWithCategories)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
