@@ -246,14 +246,25 @@ router.post('/login', async (req, res) => {
       }
     }
 
+    // Build comprehensive user details object
+    const userDetails = {
+      id: data.user?.id,
+      email: data.user?.email || userProfile?.email,
+      username: userProfile?.username || data.user?.user_metadata?.username,
+      full_name: userProfile?.full_name || null,
+      avatar_url: userProfile?.avatar_url || null,
+      phone: userProfile?.phone || null,
+      marketing_emails: userProfile?.marketing_emails || false,
+      role: userProfile?.role || 'user',
+      created_at: userProfile?.created_at || data.user?.created_at,
+      updated_at: userProfile?.updated_at || null,
+      email_confirmed: data.user?.email_confirmed_at ? true : false,
+      last_sign_in: data.user?.last_sign_in_at || null
+    }
+
     res.json({
       message: 'Login successful',
-      user: {
-        id: data.user?.id,
-        email: data.user?.email,
-        username: userProfile?.username || data.user?.user_metadata?.username,
-        ...userProfile
-      },
+      user: userDetails,
       session: {
         access_token: data.session?.access_token,
         refresh_token: data.session?.refresh_token,
