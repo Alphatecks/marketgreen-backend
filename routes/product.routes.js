@@ -18,13 +18,11 @@ router.get('/', async (req, res) => {
     } = req.query
 
     // Build query - only show active products for public
+    // Fetch products with their categories from junction table
     let query = supabase
       .from('products')
-      .select('*', { count: 'exact' })
+      .select('*, product_categories(category)', { count: 'exact' })
       .eq('product_status', 'Active') // Only show active products
-      .eq('status', 'active') // Legacy status check
-      .order(sortBy, { ascending: sortOrder === 'asc' })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
 
     // Apply filters
     if (badge) {
@@ -37,9 +35,8 @@ router.get('/', async (req, res) => {
       }
     }
 
-    if (category) {
-      query = query.eq('category', category)
-    }
+    // Note: Category filtering is done in JavaScript to check both
+    // legacy 'category' field and 'product_categories' junction table
 
     if (featured === 'true' || featured === true) {
       query = query.eq('featured', true)
@@ -49,18 +46,57 @@ router.get('/', async (req, res) => {
       query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,short_description.ilike.%${search}%`)
     }
 
-    const { data, error, count } = await query
+    // Execute query to get all matching products
+    const { data: allData, error } = await query
 
     if (error) {
       return res.status(400).json({ error: error.message })
     }
 
+    // Filter by category if provided (check both legacy field and junction table)
+    let filteredData = allData || []
+    if (category) {
+      const categoryLower = category.toLowerCase().trim()
+      filteredData = filteredData.filter(product => {
+        // Check legacy category field (case-insensitive)
+        const legacyMatch = product.category && 
+          product.category.toLowerCase() === categoryLower
+        
+        // Check product_categories junction table (case-insensitive)
+        const junctionMatch = product.product_categories && 
+          Array.isArray(product.product_categories) &&
+          product.product_categories.some(pc => 
+            pc && pc.category && pc.category.toLowerCase() === categoryLower
+          )
+        
+        return legacyMatch || junctionMatch
+      })
+    }
+
+    // Sort the filtered data
+    filteredData.sort((a, b) => {
+      const aVal = a[sortBy] || ''
+      const bVal = b[sortBy] || ''
+      if (sortOrder === 'asc') {
+        return aVal > bVal ? 1 : aVal < bVal ? -1 : 0
+      } else {
+        return aVal < bVal ? 1 : aVal > bVal ? -1 : 0
+      }
+    })
+
+    // Apply pagination after filtering
+    const total = filteredData.length
+    const paginatedData = filteredData.slice(
+      parseInt(offset), 
+      parseInt(offset) + parseInt(limit)
+    )
+
     res.json({
-      products: data || [],
-      total: count || 0,
+      products: paginatedData,
+      total: total,
       limit: parseInt(limit),
       offset: parseInt(offset),
-      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+      hasMore: total > parseInt(offset) + parseInt(limit)
     })
   } catch (error) {
     res.status(500).json({ error: error.message })

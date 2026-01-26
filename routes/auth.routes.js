@@ -283,15 +283,40 @@ router.post('/login', async (req, res) => {
 // Logout user
 router.post('/logout', async (req, res) => {
   try {
-    const { error } = await supabase.auth.signOut()
+    // Get the access token from Authorization header
+    const token = req.headers.authorization?.replace('Bearer ', '')
 
-    if (error) {
-      return res.status(400).json({ error: error.message })
+    if (!token) {
+      return res.status(401).json({ 
+        error: 'No token provided',
+        message: 'Authorization token is required for logout'
+      })
     }
 
-    res.json({ message: 'Logout successful' })
+    // Verify the user is authenticated
+    const { data: { user }, error: getUserError } = await supabase.auth.getUser(token)
+
+    if (getUserError || !user) {
+      return res.status(401).json({ 
+        error: 'Invalid or expired token',
+        message: 'Unable to authenticate user for logout'
+      })
+    }
+
+    // For REST API logout, we verify the token and return success
+    // The client should clear the token from storage
+    // Note: JWT tokens are stateless and will expire naturally
+    // If you need to invalidate tokens server-side, consider using a token blacklist
+    
+    res.json({ 
+      message: 'Logout successful',
+      user_id: user.id
+    })
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    console.error('Logout error:', error)
+    res.status(500).json({ 
+      error: 'An error occurred during logout. Please try again.' 
+    })
   }
 })
 
