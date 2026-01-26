@@ -1,5 +1,6 @@
 import express from 'express'
 import { supabase } from '../config/supabase.js'
+import { convertProductFields } from '../utils/fieldConverter.js'
 
 const router = express.Router()
 
@@ -129,9 +130,21 @@ router.post('/', async (req, res) => {
   try {
     const product = req.body
 
+    // Convert camelCase fields to snake_case and extract special fields
+    const { converted: dbProduct, categories } = convertProductFields(product)
+
+    // Update legacy category field if categories are provided
+    if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
+      dbProduct.category = categories[0] // Set first category for legacy field
+    } else if (!dbProduct.category) {
+      // Ensure category field exists (required by schema)
+      dbProduct.category = 'Uncategorized'
+    }
+
+    // Insert product into database
     const { data, error } = await supabase
       .from('products')
-      .insert([product])
+      .insert([dbProduct])
       .select()
       .single()
 
@@ -139,7 +152,45 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: error.message })
     }
 
-    res.status(201).json(data)
+    // Insert categories into junction table if provided
+    if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
+      const categoryInserts = categories
+        .filter(cat => cat && cat.trim()) // Filter out empty/null categories
+        .map(category => ({
+          product_id: data.id,
+          category: category.trim()
+        }))
+
+      if (categoryInserts.length > 0) {
+        const { error: categoryError } = await supabase
+          .from('product_categories')
+          .insert(categoryInserts)
+
+        if (categoryError) {
+          console.error('Category insertion error:', categoryError)
+          // Product was created but categories failed - still return success with warning
+          return res.status(201).json({
+            ...data,
+            warning: 'Product created but failed to add categories',
+            categoryError: categoryError.message
+          })
+        }
+      }
+    }
+
+    // Fetch product with categories for response
+    const { data: productWithCategories } = await supabase
+      .from('products')
+      .select(`
+        *,
+        product_categories (
+          category
+        )
+      `)
+      .eq('id', data.id)
+      .single()
+
+    res.status(201).json(productWithCategories || data)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -151,66 +202,8 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params
     const updates = req.body
 
-    // Extract categories separately (not a column in products table)
-    const categories = updates.categories
-    delete updates.categories
-
-    // Convert camelCase field names to snake_case for database
-    const dbUpdates = { ...updates }
-    
-    // Convert additionalImages to additional_images
-    if (dbUpdates.additionalImages !== undefined) {
-      dbUpdates.additional_images = Array.isArray(dbUpdates.additionalImages) 
-        ? dbUpdates.additionalImages 
-        : []
-      delete dbUpdates.additionalImages
-    }
-
-    // Convert other camelCase fields if needed
-    if (dbUpdates.mainImage !== undefined) {
-      dbUpdates.main_image = dbUpdates.mainImage
-      delete dbUpdates.mainImage
-    }
-
-    if (dbUpdates.currentPrice !== undefined) {
-      dbUpdates.current_price = dbUpdates.currentPrice
-      delete dbUpdates.currentPrice
-    }
-
-    if (dbUpdates.originalPrice !== undefined) {
-      dbUpdates.original_price = dbUpdates.originalPrice
-      delete dbUpdates.originalPrice
-    }
-
-    if (dbUpdates.discountPercentage !== undefined) {
-      dbUpdates.discount_percentage = dbUpdates.discountPercentage
-      delete dbUpdates.discountPercentage
-    }
-
-    if (dbUpdates.shortDescription !== undefined) {
-      dbUpdates.short_description = dbUpdates.shortDescription
-      delete dbUpdates.shortDescription
-    }
-
-    if (dbUpdates.stockStatus !== undefined) {
-      dbUpdates.stock_status = dbUpdates.stockStatus
-      delete dbUpdates.stockStatus
-    }
-
-    if (dbUpdates.productStatus !== undefined) {
-      dbUpdates.product_status = dbUpdates.productStatus
-      delete dbUpdates.productStatus
-    }
-
-    if (dbUpdates.reviewCount !== undefined) {
-      dbUpdates.review_count = dbUpdates.reviewCount
-      delete dbUpdates.reviewCount
-    }
-
-    if (dbUpdates.weightString !== undefined) {
-      dbUpdates.weight_string = dbUpdates.weightString
-      delete dbUpdates.weightString
-    }
+    // Convert camelCase fields to snake_case and extract special fields
+    const { converted: dbUpdates, categories } = convertProductFields(updates)
 
     // Update legacy category field if categories are provided
     if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
