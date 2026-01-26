@@ -151,9 +151,66 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params
     const updates = req.body
 
+    // Convert camelCase field names to snake_case for database
+    const dbUpdates = { ...updates }
+    
+    // Convert additionalImages to additional_images
+    if (dbUpdates.additionalImages !== undefined) {
+      dbUpdates.additional_images = Array.isArray(dbUpdates.additionalImages) 
+        ? dbUpdates.additionalImages 
+        : []
+      delete dbUpdates.additionalImages
+    }
+
+    // Convert other camelCase fields if needed
+    if (dbUpdates.mainImage !== undefined) {
+      dbUpdates.main_image = dbUpdates.mainImage
+      delete dbUpdates.mainImage
+    }
+
+    if (dbUpdates.currentPrice !== undefined) {
+      dbUpdates.current_price = dbUpdates.currentPrice
+      delete dbUpdates.currentPrice
+    }
+
+    if (dbUpdates.originalPrice !== undefined) {
+      dbUpdates.original_price = dbUpdates.originalPrice
+      delete dbUpdates.originalPrice
+    }
+
+    if (dbUpdates.discountPercentage !== undefined) {
+      dbUpdates.discount_percentage = dbUpdates.discountPercentage
+      delete dbUpdates.discountPercentage
+    }
+
+    if (dbUpdates.shortDescription !== undefined) {
+      dbUpdates.short_description = dbUpdates.shortDescription
+      delete dbUpdates.shortDescription
+    }
+
+    if (dbUpdates.stockStatus !== undefined) {
+      dbUpdates.stock_status = dbUpdates.stockStatus
+      delete dbUpdates.stockStatus
+    }
+
+    if (dbUpdates.productStatus !== undefined) {
+      dbUpdates.product_status = dbUpdates.productStatus
+      delete dbUpdates.productStatus
+    }
+
+    if (dbUpdates.reviewCount !== undefined) {
+      dbUpdates.review_count = dbUpdates.reviewCount
+      delete dbUpdates.reviewCount
+    }
+
+    if (dbUpdates.weightString !== undefined) {
+      dbUpdates.weight_string = dbUpdates.weightString
+      delete dbUpdates.weightString
+    }
+
     const { data, error } = await supabase
       .from('products')
-      .update(updates)
+      .update(dbUpdates)
       .eq('id', id)
       .select()
       .single()
