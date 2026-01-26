@@ -215,6 +215,31 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params
     const updates = req.body
 
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid product ID format' })
+    }
+
+    // Check if product exists first
+    const { data: existingProduct, error: checkError } = await supabase
+      .from('products')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (checkError) {
+      console.error('Error checking product existence:', checkError)
+      return res.status(500).json({ 
+        error: 'Failed to check product existence',
+        details: checkError.message 
+      })
+    }
+
+    if (!existingProduct) {
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
     // Convert camelCase fields to snake_case and extract special fields
     const { converted: dbUpdates, categories } = convertProductFields(updates)
 
@@ -231,11 +256,25 @@ router.put('/:id', async (req, res) => {
       .select()
 
     if (error) {
-      return res.status(400).json({ error: error.message })
+      console.error('Product update error:', error)
+      // Check if it's an RLS policy error
+      if (error.message?.includes('policy') || error.message?.includes('permission')) {
+        return res.status(403).json({ 
+          error: 'Permission denied. You may not have permission to update this product.',
+          details: error.message 
+        })
+      }
+      return res.status(400).json({ 
+        error: 'Failed to update product',
+        details: error.message 
+      })
     }
 
     if (!data || data.length === 0) {
-      return res.status(404).json({ error: 'Product not found' })
+      // This shouldn't happen if product exists, but handle it anyway
+      return res.status(404).json({ 
+        error: 'Product update returned no results. The product may have been deleted or you may not have permission to update it.' 
+      })
     }
 
     const updatedProduct = data[0]
