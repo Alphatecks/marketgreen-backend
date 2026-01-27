@@ -10,6 +10,15 @@ const router = express.Router()
 // Initialize Paystack
 const paystackClient = paystack(process.env.PAYSTACK_SECRET_KEY)
 
+// Helper function to get backend URL for callback
+const getBackendUrl = () => {
+  // Try BACKEND_URL first, then RENDER_EXTERNAL_URL (for Render hosting), then construct from request
+  return process.env.BACKEND_URL || 
+         process.env.RENDER_EXTERNAL_URL || 
+         process.env.API_URL ||
+         'http://localhost:3000'
+}
+
 // Helper function to authenticate user
 const authenticateUser = async (req) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
@@ -179,12 +188,13 @@ router.post('/initialize', async (req, res) => {
     }
 
     // Initialize Paystack transaction
+    const backendUrl = getBackendUrl()
     const response = await paystackClient.transaction.initialize({
       email,
       amount: amountInKobo,
       currency: 'NGN',
       metadata: paymentMetadata,
-      callback_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/callback`,
+      callback_url: `${backendUrl}/api/payments/callback`,
       reference: `MKG-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
     })
 
@@ -207,6 +217,165 @@ router.post('/initialize', async (req, res) => {
       error: 'Failed to initialize payment',
       details: error.message 
     })
+  }
+})
+
+// Paystack callback handler (for redirect after payment)
+// This endpoint receives Paystack redirects and verifies payment, then redirects to frontend
+router.get('/callback', async (req, res) => {
+  try {
+    const { reference, trxref } = req.query
+    const paymentRef = reference || trxref
+
+    if (!paymentRef) {
+      // No reference provided, redirect to frontend with error
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Processing</title>
+          <meta http-equiv="refresh" content="2;url=${frontendUrl}/payment/callback?error=no_reference">
+        </head>
+        <body>
+          <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+            <h2>Processing payment...</h2>
+            <p>Redirecting...</p>
+          </div>
+        </body>
+        </html>
+      `)
+    }
+
+    // Verify transaction with Paystack
+    const response = await paystackClient.transaction.verify(paymentRef)
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+    const backendUrl = getBackendUrl()
+
+    if (!response.status) {
+      // Verification failed, redirect to frontend with error
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Verification Failed</title>
+          <meta http-equiv="refresh" content="2;url=${frontendUrl}/payment/callback?reference=${paymentRef}&status=failed&error=${encodeURIComponent(response.message || 'Verification failed')}">
+        </head>
+        <body>
+          <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+            <h2>Payment Verification Failed</h2>
+            <p>Redirecting...</p>
+          </div>
+        </body>
+        </html>
+      `)
+    }
+
+    const transaction = response.data
+    const isSuccess = transaction.status === 'success'
+
+    // Update order payment status if order_id exists
+    if (transaction.metadata?.order_id) {
+      const orderId = transaction.metadata.order_id
+      
+      // Update order payment status using admin client to bypass RLS
+      const { error: updateError } = await supabaseAdmin
+        .from('orders')
+        .update({
+          payment_status: isSuccess ? 'paid' : 'failed',
+          payment_method: 'paystack',
+          status: isSuccess ? 'confirmed' : 'pending',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', orderId)
+
+      if (updateError) {
+        console.error('Error updating order payment status:', updateError)
+      }
+    }
+
+    // Redirect to frontend with success/failure status
+    const status = isSuccess ? 'success' : 'failed'
+    const redirectUrl = `${frontendUrl}/payment/callback?reference=${paymentRef}&status=${status}`
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Payment ${isSuccess ? 'Success' : 'Failed'}</title>
+        <meta http-equiv="refresh" content="2;url=${redirectUrl}">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          }
+          .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 400px;
+          }
+          .success { color: #10b981; }
+          .failed { color: #ef4444; }
+          .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h2 class="${isSuccess ? 'success' : 'failed'}">
+            Payment ${isSuccess ? 'Successful!' : 'Failed'}
+          </h2>
+          <div class="spinner"></div>
+          <p>Redirecting to confirmation page...</p>
+          <p style="font-size: 12px; color: #666; margin-top: 20px;">
+            If you are not redirected automatically, 
+            <a href="${redirectUrl}">click here</a>
+          </p>
+        </div>
+      </body>
+      </html>
+    `)
+  } catch (error) {
+    console.error('Payment callback error:', error)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+    const { reference, trxref } = req.query
+    const paymentRef = reference || trxref || ''
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Payment Error</title>
+        <meta http-equiv="refresh" content="3;url=${frontendUrl}/payment/callback?${paymentRef ? `reference=${paymentRef}&` : ''}status=error&error=${encodeURIComponent(error.message)}">
+      </head>
+      <body>
+        <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+          <h2 style="color: #ef4444;">Payment Processing Error</h2>
+          <p>Redirecting...</p>
+        </div>
+      </body>
+      </html>
+    `)
   }
 })
 
@@ -343,7 +512,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       if (transaction.metadata?.order_id) {
         const orderId = transaction.metadata.order_id
 
-        const { error: updateError } = await supabase
+        const { error: updateError } = await supabaseAdmin
           .from('orders')
           .update({
             payment_status: 'failed',
@@ -441,6 +610,7 @@ router.post('/create-order', async (req, res) => {
 
       try {
         const amountInKobo = Math.round(parseFloat(total_amount) * 100)
+        const backendUrl = getBackendUrl()
         const paymentResponse = await paystackClient.transaction.initialize({
           email,
           amount: amountInKobo,
@@ -449,7 +619,7 @@ router.post('/create-order', async (req, res) => {
             user_id: user.id,
             order_id: order.id
           },
-          callback_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/callback`,
+          callback_url: `${backendUrl}/api/payments/callback`,
           reference: `MKG-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
         })
 
