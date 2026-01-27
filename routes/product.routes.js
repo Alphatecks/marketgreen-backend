@@ -204,6 +204,207 @@ router.get('/top-rated', async (req, res) => {
   }
 })
 
+// Get related products for a specific product
+router.get('/:id/related', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { limit = 10 } = req.query
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid product ID format' })
+    }
+
+    // First, fetch the product to get its details
+    const { data: product, error: productError } = await supabase
+      .from('products')
+      .select('*, product_categories(category)')
+      .eq('id', id)
+      .single()
+
+    if (productError || !product) {
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
+    // Build query for related products
+    // Start with products in the same category (from legacy field or junction table)
+    let query = supabase
+      .from('products')
+      .select('*, product_categories(category)', { count: 'exact' })
+      .eq('product_status', 'Active')
+      .neq('id', id) // Exclude the current product
+
+    // Match by legacy category field
+    if (product.category) {
+      query = query.eq('category', product.category)
+    }
+
+    // Execute initial query
+    const { data: categoryMatches, error: categoryError } = await query
+
+    if (categoryError) {
+      return res.status(400).json({ error: categoryError.message })
+    }
+
+    // Also check junction table categories if product has them
+    let allMatches = categoryMatches || []
+    const existingIds = new Set(allMatches.map(p => p.id))
+    
+    if (product.product_categories && Array.isArray(product.product_categories) && product.product_categories.length > 0) {
+      const categoryNames = product.product_categories.map(pc => pc.category).filter(Boolean)
+      
+      if (categoryNames.length > 0) {
+        // Only fetch more products if we don't have enough matches yet
+        // Or if the product has junction categories that differ from legacy category
+        const needsMoreProducts = allMatches.length < parseInt(limit) || 
+          !product.category || 
+          !categoryNames.includes(product.category)
+        
+        if (needsMoreProducts) {
+          // Fetch active products with categories (we'll filter in JavaScript)
+          // Limit to a reasonable number to avoid fetching everything
+          const { data: activeProducts, error: junctionError } = await supabase
+            .from('products')
+            .select('*, product_categories(category)')
+            .eq('product_status', 'Active')
+            .neq('id', id)
+            .limit(100) // Limit to avoid fetching too many products
+
+          if (!junctionError && activeProducts) {
+            // Filter products that have matching categories from junction table
+            const junctionMatches = activeProducts.filter(p => {
+              if (existingIds.has(p.id)) return false // Skip duplicates
+              
+              if (p.product_categories && Array.isArray(p.product_categories)) {
+                const relatedCategories = p.product_categories.map(pc => pc.category).filter(Boolean)
+                return relatedCategories.some(cat => categoryNames.includes(cat))
+              }
+              return false
+            })
+
+            // Merge results
+            allMatches = [...allMatches, ...junctionMatches]
+          }
+        }
+      }
+    }
+
+    // If we still don't have enough matches, try to find products by other criteria
+    if (allMatches.length < parseInt(limit)) {
+      // Try matching by tags or brand
+      const { data: fallbackProducts, error: fallbackError } = await supabase
+        .from('products')
+        .select('*, product_categories(category)')
+        .eq('product_status', 'Active')
+        .neq('id', id)
+        .limit(50)
+
+      if (!fallbackError && fallbackProducts) {
+        const fallbackMatches = fallbackProducts.filter(p => {
+          if (existingIds.has(p.id)) return false
+          
+          // Match by brand
+          if (product.brand && p.brand && p.brand === product.brand) {
+            return true
+          }
+          
+          // Match by tags
+          if (product.tags && Array.isArray(product.tags) && p.tags && Array.isArray(p.tags)) {
+            const productTags = product.tags.map(t => t.toLowerCase())
+            const relatedTags = p.tags.map(t => t.toLowerCase())
+            return productTags.some(tag => relatedTags.includes(tag))
+          }
+          
+          return false
+        })
+
+        allMatches = [...allMatches, ...fallbackMatches]
+      }
+    }
+
+    // Score and rank products by relevance
+    const scoredProducts = allMatches.map(relatedProduct => {
+      let score = 0
+
+      // Same category (legacy field) - high priority
+      if (relatedProduct.category === product.category) {
+        score += 10
+      }
+
+      // Matching categories from junction table - high priority
+      if (relatedProduct.product_categories && Array.isArray(relatedProduct.product_categories)) {
+        const relatedCategories = relatedProduct.product_categories.map(pc => pc.category).filter(Boolean)
+        const productCategories = product.product_categories 
+          ? product.product_categories.map(pc => pc.category).filter(Boolean)
+          : []
+        
+        const matchingCategories = relatedCategories.filter(cat => productCategories.includes(cat))
+        score += matchingCategories.length * 10
+      }
+
+      // Same brand - medium priority
+      if (product.brand && relatedProduct.brand && relatedProduct.brand === product.brand) {
+        score += 5
+      }
+
+      // Same subcategory - medium priority
+      if (product.subcategory && relatedProduct.subcategory && relatedProduct.subcategory === product.subcategory) {
+        score += 5
+      }
+
+      // Matching tags - medium priority
+      if (product.tags && Array.isArray(product.tags) && relatedProduct.tags && Array.isArray(relatedProduct.tags)) {
+        const productTags = product.tags.map(t => t.toLowerCase())
+        const relatedTags = relatedProduct.tags.map(t => t.toLowerCase())
+        const matchingTags = productTags.filter(tag => relatedTags.includes(tag))
+        score += matchingTags.length * 3
+      }
+
+      // Boost score by rating (to show better products first)
+      if (relatedProduct.rating) {
+        score += relatedProduct.rating * 2
+      }
+
+      return {
+        ...relatedProduct,
+        relevanceScore: score
+      }
+    })
+
+    // Sort by relevance score (descending), then by rating (descending)
+    scoredProducts.sort((a, b) => {
+      if (b.relevanceScore !== a.relevanceScore) {
+        return b.relevanceScore - a.relevanceScore
+      }
+      return (b.rating || 0) - (a.rating || 0)
+    })
+
+    // Limit results
+    const limitedProducts = scoredProducts.slice(0, parseInt(limit))
+
+    // Remove relevanceScore from final response (or keep it for debugging)
+    const finalProducts = limitedProducts.map(({ relevanceScore, ...product }) => product)
+
+    // Normalize image fields
+    const normalizedProducts = normalizeProductsImages(finalProducts)
+
+    res.json({
+      products: normalizedProducts,
+      total: limitedProducts.length,
+      limit: parseInt(limit),
+      relatedTo: {
+        id: product.id,
+        name: product.name,
+        category: product.category,
+        categories: product.product_categories?.map(pc => pc.category) || []
+      }
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Get single product by ID
 router.get('/:id', async (req, res) => {
   try {
