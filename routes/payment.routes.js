@@ -1,6 +1,6 @@
 import express from 'express'
 import paystack from 'paystack'
-import { supabase } from '../config/supabase.js'
+import { supabase, supabaseAdmin } from '../config/supabase.js'
 import dotenv from 'dotenv'
 
 dotenv.config()
@@ -103,7 +103,7 @@ router.post('/charge', async (req, res) => {
 
     // Update order payment status if order_id exists
     if (orderId) {
-      const { error: updateError } = await supabase
+      const { error: updateError } = await supabaseAdmin
         .from('orders')
         .update({
           payment_status: transaction.status === 'success' ? 'paid' : 'failed',
@@ -251,7 +251,7 @@ router.get('/verify/:reference', async (req, res) => {
       const orderId = transaction.metadata.order_id
       
       // Update order payment status
-      const { error: updateError } = await supabase
+      const { error: updateError } = await supabaseAdmin
         .from('orders')
         .update({
           payment_status: transaction.status === 'success' ? 'paid' : 'failed',
@@ -321,7 +321,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       if (transaction.metadata?.order_id) {
         const orderId = transaction.metadata.order_id
 
-        const { error: updateError } = await supabase
+        const { error: updateError } = await supabaseAdmin
           .from('orders')
           .update({
             payment_status: 'paid',
@@ -419,7 +419,7 @@ router.post('/create-order', async (req, res) => {
       notes: notes || null
     }
 
-    const { data: order, error: orderError } = await supabase
+    const { data: order, error: orderError } = await supabaseAdmin
       .from('orders')
       .insert([orderData])
       .select()
