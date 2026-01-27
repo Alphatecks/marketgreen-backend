@@ -13,6 +13,28 @@ import { convertProductFields } from '../utils/fieldConverter.js'
 
 const router = express.Router()
 
+// Helper function to normalize image fields in product responses
+// Ensures main_image and image_url are always synchronized
+const normalizeProductImages = (product) => {
+  if (!product) return product
+  
+  // Prioritize main_image over image_url
+  const imageUrl = product.main_image || product.image_url || null
+  
+  // Ensure both fields have the same value
+  return {
+    ...product,
+    main_image: imageUrl,
+    image_url: imageUrl
+  }
+}
+
+// Helper function to normalize image fields in an array of products
+const normalizeProductsImages = (products) => {
+  if (!Array.isArray(products)) return products
+  return products.map(normalizeProductImages)
+}
+
 // Middleware to check if user is admin
 const checkAdmin = async (req, res, next) => {
   try {
@@ -931,8 +953,11 @@ router.get('/products', checkAdmin, async (req, res) => {
       return res.status(500).json({ error: error.message })
     }
 
+    // Normalize image fields to ensure main_image and image_url are synchronized
+    const normalizedProducts = normalizeProductsImages(data || [])
+
     res.json({
-      products: data || [],
+      products: normalizedProducts,
       total: count || 0,
       limit: parseInt(limit),
       offset: parseInt(offset),
@@ -1157,10 +1182,14 @@ router.get('/products/best-selling', checkAdmin, async (req, res) => {
           : 'Stock out'
         const stockStatusColor = stockStatus === 'Stock' ? 'green' : 'red'
 
+        // Normalize image fields
+        const imageUrl = product.main_image || product.image_url || null
+
         return {
           id: product.id,
           name: product.name,
-          image_url: product.image_url,
+          image_url: imageUrl,
+          main_image: imageUrl, // Ensure both fields are synchronized
           price: parseFloat(product.price || 0),
           priceFormatted: new Intl.NumberFormat('en-US', {
             style: 'currency',
@@ -1233,7 +1262,10 @@ router.get('/products/:id', checkAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Product not found' })
     }
 
-    res.json(data)
+    // Normalize image fields to ensure main_image and image_url are synchronized
+    const normalizedProduct = normalizeProductImages(data)
+
+    res.json(normalizedProduct)
   } catch (error) {
     console.error('Admin product error:', error)
     res.status(500).json({ error: error.message })
@@ -1464,6 +1496,9 @@ router.post('/products', checkAdmin, async (req, res) => {
       .eq('id', product.id)
       .single()
 
+    // Normalize image fields to ensure main_image and image_url are synchronized
+    const imageUrl = product.main_image || product.image_url || null
+
     // Format response to match specification
     const responseData = {
       id: product.id,
@@ -1477,7 +1512,8 @@ router.post('/products', checkAdmin, async (req, res) => {
       short_description: product.short_description,
       categories: productWithCategories?.product_categories?.map(pc => pc.category) || categories || [],
       badge: product.badge,
-      main_image: product.main_image,
+      main_image: imageUrl,
+      image_url: imageUrl, // Ensure both fields are synchronized
       additional_images: product.additional_images || [],
       rating: product.rating ? parseFloat(product.rating) : 0,
       review_count: product.review_count || 0,
@@ -1516,6 +1552,25 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     if (!uuidRegex.test(id)) {
       return res.status(400).json({ error: 'Invalid product ID format' })
+    }
+
+    // Check if product exists first
+    const { data: existingProduct, error: checkError } = await supabaseAdmin
+      .from('products')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (checkError) {
+      console.error('Error checking product existence:', checkError)
+      return res.status(500).json({ 
+        error: 'Failed to check product existence',
+        details: checkError.message 
+      })
+    }
+
+    if (!existingProduct) {
+      return res.status(404).json({ error: 'Product not found' })
     }
 
     // Convert camelCase fields to snake_case and extract special fields
@@ -1557,26 +1612,65 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
     // Add updated_at timestamp
     dbUpdates.updated_at = new Date().toISOString()
 
+    // Check if we have any fields to update
+    const fieldsToUpdate = Object.keys(dbUpdates).filter(key => dbUpdates[key] !== undefined)
+    if (fieldsToUpdate.length === 0) {
+      return res.status(400).json({ 
+        error: 'No valid fields to update',
+        details: 'Please provide at least one field to update'
+      })
+    }
+
+    // Log the update for debugging
+    console.log('Updating product:', id, 'Fields:', fieldsToUpdate)
+
     // Update product
     const { data, error } = await supabaseAdmin
       .from('products')
       .update(dbUpdates)
       .eq('id', id)
       .select()
-      .single()
 
     if (error) {
       console.error('Product update error:', error)
+      console.error('Update payload:', dbUpdates)
       // Check if it's a "not found" error
       if (error.code === 'PGRST116' || error.message?.includes('No rows') || error.message?.includes('not found')) {
-        return res.status(404).json({ error: 'Product not found' })
+        return res.status(404).json({ 
+          error: 'Product not found',
+          details: 'The product may have been deleted or the ID is incorrect'
+        })
       }
-      return res.status(400).json({ error: error.message })
+      return res.status(400).json({ 
+        error: 'Failed to update product',
+        details: error.message 
+      })
     }
 
-    if (!data) {
-      return res.status(404).json({ error: 'Product not found' })
+    if (!data || data.length === 0) {
+      console.error('Update returned no data. Product ID:', id)
+      console.error('Update payload:', dbUpdates)
+      // Try to fetch the product to see if it still exists
+      const { data: checkData, error: checkErr } = await supabaseAdmin
+        .from('products')
+        .select('id, name')
+        .eq('id', id)
+        .maybeSingle()
+      
+      if (checkErr || !checkData) {
+        return res.status(404).json({ 
+          error: 'Product not found',
+          details: 'The product may have been deleted'
+        })
+      }
+      
+      return res.status(500).json({ 
+        error: 'Product update returned no results',
+        details: 'The update may have failed silently. Please check the update payload and try again.'
+      })
     }
+
+    const updatedProduct = data[0]
 
     // Update product_categories junction table if categories are provided
     if (categories !== undefined && Array.isArray(categories)) {
@@ -1603,9 +1697,10 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
           if (categoryError) {
             console.error('Category update error:', categoryError)
             // Product was updated but categories failed - still return success with warning
+            // Normalize image fields before returning
             return res.json({
               message: 'Product updated successfully',
-              product: data,
+              product: normalizeProductImages(updatedProduct),
               warning: 'Product updated but categories update failed',
               categoryError: categoryError.message
             })
@@ -1631,15 +1726,17 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
       if (fetchError) {
         console.error('Error fetching product with categories:', fetchError)
       }
+      // Normalize image fields before returning
       return res.json({
         message: 'Product updated successfully',
-        product: data
+        product: normalizeProductImages(data)
       })
     }
 
+    // Normalize image fields before returning
     res.json({
       message: 'Product updated successfully',
-      product: productWithCategories
+      product: normalizeProductImages(productWithCategories)
     })
   } catch (error) {
     console.error('Update product error:', error)

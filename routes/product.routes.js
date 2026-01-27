@@ -4,6 +4,28 @@ import { convertProductFields } from '../utils/fieldConverter.js'
 
 const router = express.Router()
 
+// Helper function to normalize image fields in product responses
+// Ensures main_image and image_url are always synchronized
+const normalizeProductImages = (product) => {
+  if (!product) return product
+  
+  // Prioritize main_image over image_url
+  const imageUrl = product.main_image || product.image_url || null
+  
+  // Ensure both fields have the same value
+  return {
+    ...product,
+    main_image: imageUrl,
+    image_url: imageUrl
+  }
+}
+
+// Helper function to normalize image fields in an array of products
+const normalizeProductsImages = (products) => {
+  if (!Array.isArray(products)) return products
+  return products.map(normalizeProductImages)
+}
+
 // Get all products (public endpoint - no auth required)
 router.get('/', async (req, res) => {
   try {
@@ -92,8 +114,11 @@ router.get('/', async (req, res) => {
       parseInt(offset) + parseInt(limit)
     )
 
+    // Normalize image fields to ensure main_image and image_url are synchronized
+    const normalizedProducts = normalizeProductsImages(paginatedData)
+
     res.json({
-      products: paginatedData,
+      products: normalizedProducts,
       total: total,
       limit: parseInt(limit),
       offset: parseInt(offset),
@@ -119,7 +144,10 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Product not found' })
     }
 
-    res.json(data)
+    // Normalize image fields to ensure main_image and image_url are synchronized
+    const normalizedProduct = normalizeProductImages(data)
+
+    res.json(normalizedProduct)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -200,10 +228,12 @@ router.post('/', async (req, res) => {
       if (fetchError) {
         console.error('Error fetching product with categories:', fetchError)
       }
-      return res.status(201).json(createdProduct)
+      // Normalize image fields before returning
+      return res.status(201).json(normalizeProductImages(createdProduct))
     }
 
-    res.status(201).json(productWithCategories)
+    // Normalize image fields before returning
+    res.status(201).json(normalizeProductImages(productWithCategories))
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -341,10 +371,12 @@ router.put('/:id', async (req, res) => {
       if (fetchError) {
         console.error('Error fetching product with categories:', fetchError)
       }
-      return res.json(updatedProduct)
+      // Normalize image fields before returning
+      return res.json(normalizeProductImages(updatedProduct))
     }
 
-    res.json(productWithCategories)
+    // Normalize image fields before returning
+    res.json(normalizeProductImages(productWithCategories))
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
