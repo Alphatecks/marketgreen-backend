@@ -235,7 +235,7 @@ router.get('/callback', async (req, res) => {
         <html>
         <head>
           <title>Payment Processing</title>
-          <meta http-equiv="refresh" content="2;url=${frontendUrl}/payment/callback?error=no_reference">
+          <meta http-equiv="refresh" content="2;url=${frontendUrl}/payment/error?error=no_reference">
         </head>
         <body>
           <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
@@ -260,7 +260,7 @@ router.get('/callback', async (req, res) => {
         <html>
         <head>
           <title>Payment Verification Failed</title>
-          <meta http-equiv="refresh" content="2;url=${frontendUrl}/payment/callback?reference=${paymentRef}&status=failed&error=${encodeURIComponent(response.message || 'Verification failed')}">
+          <meta http-equiv="refresh" content="2;url=${frontendUrl}/payment/failed?reference=${paymentRef}&error=${encodeURIComponent(response.message || 'Verification failed')}">
         </head>
         <body>
           <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
@@ -297,7 +297,8 @@ router.get('/callback', async (req, res) => {
 
     // Redirect to frontend with success/failure status
     const status = isSuccess ? 'success' : 'failed'
-    const redirectUrl = `${frontendUrl}/payment/callback?reference=${paymentRef}&status=${status}`
+    // Redirect to payment success/failure page (frontend should handle this route)
+    const redirectUrl = `${frontendUrl}/payment/${status}?reference=${paymentRef}`
 
     res.send(`
       <!DOCTYPE html>
@@ -366,7 +367,7 @@ router.get('/callback', async (req, res) => {
       <html>
       <head>
         <title>Payment Error</title>
-        <meta http-equiv="refresh" content="3;url=${frontendUrl}/payment/callback?${paymentRef ? `reference=${paymentRef}&` : ''}status=error&error=${encodeURIComponent(error.message)}">
+        <meta http-equiv="refresh" content="3;url=${frontendUrl}/payment/error?${paymentRef ? `reference=${paymentRef}&` : ''}error=${encodeURIComponent(error.message)}">
       </head>
       <body>
         <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
