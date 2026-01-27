@@ -94,9 +94,9 @@ const formatNumber = (num) => {
 
 // Format currency
 const formatCurrency = (amount) => {
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('en-NG', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'NGN',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
   }).format(amount)
@@ -781,9 +781,9 @@ router.get('/transactions', checkAdmin, async (req, res) => {
         paymentStatus: paymentStatus,
         orderStatus: order.status,
         amount: parseFloat(order.total_amount || 0),
-        amountFormatted: new Intl.NumberFormat('en-US', {
+        amountFormatted: new Intl.NumberFormat('en-NG', {
           style: 'currency',
-          currency: 'USD',
+          currency: 'NGN',
           minimumFractionDigits: 0,
           maximumFractionDigits: 2
         }).format(order.total_amount || 0),
@@ -1191,9 +1191,9 @@ router.get('/products/best-selling', checkAdmin, async (req, res) => {
           image_url: imageUrl,
           main_image: imageUrl, // Ensure both fields are synchronized
           price: parseFloat(product.price || 0),
-          priceFormatted: new Intl.NumberFormat('en-US', {
+          priceFormatted: new Intl.NumberFormat('en-NG', {
             style: 'currency',
-            currency: 'USD',
+            currency: 'NGN',
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
           }).format(product.price || 0),
