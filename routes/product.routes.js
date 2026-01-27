@@ -129,6 +129,81 @@ router.get('/', async (req, res) => {
   }
 })
 
+// Get top rated products
+router.get('/top-rated', async (req, res) => {
+  try {
+    const {
+      minRating = 0,
+      minReviews = 0,
+      limit = 20,
+      offset = 0,
+      category
+    } = req.query
+
+    // Build query - only show active products
+    let query = supabase
+      .from('products')
+      .select('*, product_categories(category)', { count: 'exact' })
+      .eq('product_status', 'Active')
+      .gte('rating', parseFloat(minRating))
+      .gte('review_count', parseInt(minReviews))
+      .order('rating', { ascending: false })
+      .order('review_count', { ascending: false }) // Secondary sort by review count
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Execute query
+    const { data, error, count } = await query
+
+    if (error) {
+      return res.status(400).json({ error: error.message })
+    }
+
+    // Filter by category if provided (check both legacy field and junction table)
+    let filteredData = data || []
+    if (category) {
+      const categoryLower = category.toLowerCase().trim()
+      filteredData = filteredData.filter(product => {
+        // Check legacy category field (case-insensitive)
+        const legacyMatch = product.category && 
+          product.category.toLowerCase() === categoryLower
+        
+        // Check product_categories junction table (case-insensitive)
+        const junctionMatch = product.product_categories && 
+          Array.isArray(product.product_categories) &&
+          product.product_categories.some(pc => 
+            pc && pc.category && pc.category.toLowerCase() === categoryLower
+          )
+        
+        return legacyMatch || junctionMatch
+      })
+    }
+
+    // Normalize image fields to ensure main_image and image_url are synchronized
+    const normalizedProducts = normalizeProductsImages(filteredData)
+
+    // Calculate total (if category filter was applied, we need to recalculate)
+    let total = count || 0
+    if (category) {
+      total = filteredData.length
+    }
+
+    res.json({
+      products: normalizedProducts,
+      total: total,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: total > parseInt(offset) + parseInt(limit),
+      filters: {
+        minRating: parseFloat(minRating),
+        minReviews: parseInt(minReviews),
+        category: category || null
+      }
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Get single product by ID
 router.get('/:id', async (req, res) => {
   try {
