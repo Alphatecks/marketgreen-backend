@@ -243,6 +243,16 @@ router.put('/:id', async (req, res) => {
     // Convert camelCase fields to snake_case and extract special fields
     const { converted: dbUpdates, categories } = convertProductFields(updates)
 
+    // Synchronize image fields: ensure main_image and image_url stay in sync
+    // If main_image is updated, also update image_url (for backward compatibility)
+    if (dbUpdates.main_image !== undefined) {
+      dbUpdates.image_url = dbUpdates.main_image
+    }
+    // If image_url is updated, also update main_image (for consistency)
+    if (dbUpdates.image_url !== undefined && dbUpdates.main_image === undefined) {
+      dbUpdates.main_image = dbUpdates.image_url
+    }
+
     // Update legacy category field if categories are provided
     if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
       dbUpdates.category = categories[0] // Set first category for legacy field

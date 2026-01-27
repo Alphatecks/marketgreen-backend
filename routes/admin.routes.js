@@ -9,6 +9,7 @@ import {
   validateCategories,
   ALLOWED_CATEGORIES
 } from '../utils/productValidation.js'
+import { convertProductFields } from '../utils/fieldConverter.js'
 
 const router = express.Router()
 
@@ -1517,46 +1518,49 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Invalid product ID format' })
     }
 
+    // Convert camelCase fields to snake_case and extract special fields
+    const { converted: dbUpdates, categories } = convertProductFields(updates)
+
+    // Synchronize image fields: ensure main_image and image_url stay in sync
+    // If main_image is updated, also update image_url (for backward compatibility)
+    if (dbUpdates.main_image !== undefined) {
+      dbUpdates.image_url = dbUpdates.main_image
+    }
+    // If image_url is updated, also update main_image (for consistency)
+    if (dbUpdates.image_url !== undefined && dbUpdates.main_image === undefined) {
+      dbUpdates.main_image = dbUpdates.image_url
+    }
+
     // Validate price if provided
-    if (updates.price !== undefined && updates.price < 0) {
+    if (dbUpdates.price !== undefined && dbUpdates.price < 0) {
       return res.status(400).json({ error: 'Price must be greater than or equal to 0' })
+    }
+    if (dbUpdates.current_price !== undefined && dbUpdates.current_price < 0) {
+      return res.status(400).json({ error: 'Current price must be greater than or equal to 0' })
     }
 
     // Validate stock if provided
-    if (updates.stock !== undefined && updates.stock < 0) {
+    if (dbUpdates.stock !== undefined && dbUpdates.stock < 0) {
       return res.status(400).json({ error: 'Stock must be greater than or equal to 0' })
     }
 
     // Validate status if provided
-    if (updates.status && !['active', 'inactive', 'out_of_stock'].includes(updates.status)) {
+    if (dbUpdates.status && !['active', 'inactive', 'out_of_stock'].includes(dbUpdates.status)) {
       return res.status(400).json({ error: 'Invalid status. Must be: active, inactive, or out_of_stock' })
     }
 
-    // Convert numeric fields
-    if (updates.price !== undefined) {
-      updates.price = parseFloat(updates.price)
-    }
-    if (updates.stock !== undefined) {
-      updates.stock = parseInt(updates.stock)
-    }
-    if (updates.weight !== undefined && updates.weight !== null) {
-      updates.weight = parseFloat(updates.weight)
-    }
-
-    // Convert boolean fields
-    if (updates.is_organic !== undefined) {
-      updates.is_organic = Boolean(updates.is_organic)
-    }
-    if (updates.is_fresh !== undefined) {
-      updates.is_fresh = Boolean(updates.is_fresh)
+    // Update legacy category field if categories are provided
+    if (categories !== undefined && Array.isArray(categories) && categories.length > 0) {
+      dbUpdates.category = categories[0] // Set first category for legacy field
     }
 
     // Add updated_at timestamp
-    updates.updated_at = new Date().toISOString()
+    dbUpdates.updated_at = new Date().toISOString()
 
+    // Update product
     const { data, error } = await supabaseAdmin
       .from('products')
-      .update(updates)
+      .update(dbUpdates)
       .eq('id', id)
       .select()
       .single()
@@ -1574,9 +1578,68 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Product not found' })
     }
 
+    // Update product_categories junction table if categories are provided
+    if (categories !== undefined && Array.isArray(categories)) {
+      // Delete existing categories for this product
+      await supabaseAdmin
+        .from('product_categories')
+        .delete()
+        .eq('product_id', id)
+
+      // Insert new categories
+      if (categories.length > 0) {
+        const categoryInserts = categories
+          .filter(cat => cat && cat.trim()) // Filter out empty/null categories
+          .map(category => ({
+            product_id: id,
+            category: category.trim()
+          }))
+
+        if (categoryInserts.length > 0) {
+          const { error: categoryError } = await supabaseAdmin
+            .from('product_categories')
+            .insert(categoryInserts)
+
+          if (categoryError) {
+            console.error('Category update error:', categoryError)
+            // Product was updated but categories failed - still return success with warning
+            return res.json({
+              message: 'Product updated successfully',
+              product: data,
+              warning: 'Product updated but categories update failed',
+              categoryError: categoryError.message
+            })
+          }
+        }
+      }
+    }
+
+    // Fetch product with categories for response
+    const { data: productWithCategories, error: fetchError } = await supabaseAdmin
+      .from('products')
+      .select(`
+        *,
+        product_categories (
+          category
+        )
+      `)
+      .eq('id', id)
+      .maybeSingle()
+
+    if (fetchError || !productWithCategories) {
+      // If fetch fails, return the data from update
+      if (fetchError) {
+        console.error('Error fetching product with categories:', fetchError)
+      }
+      return res.json({
+        message: 'Product updated successfully',
+        product: data
+      })
+    }
+
     res.json({
       message: 'Product updated successfully',
-      product: data
+      product: productWithCategories
     })
   } catch (error) {
     console.error('Update product error:', error)
