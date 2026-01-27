@@ -4,10 +4,35 @@
  */
 
 /**
+ * List of fields that should be filtered out (not database columns)
+ * These are either computed fields, relationships, or frontend-only fields
+ */
+const NON_DATABASE_FIELDS = [
+  'id', // Should not be updated
+  'categories', // Handled separately via junction table
+  'product_categories', // Relationship data, not a column
+  'created_at', // Usually auto-managed, but allow if explicitly sent
+]
+
+/**
+ * Valid database columns in products table (snake_case)
+ * Used to preserve fields that are already in correct format
+ */
+const VALID_DATABASE_COLUMNS = [
+  'name', 'description', 'price', 'image_url', 'slug', 'current_price',
+  'original_price', 'discount_percentage', 'short_description', 'badge',
+  'main_image', 'additional_images', 'rating', 'review_count', 'stock_status',
+  'product_status', 'featured', 'weight_string', 'dimensions', 'tags',
+  'category', 'subcategory', 'stock', 'unit', 'weight', 'is_organic',
+  'is_fresh', 'expiry_date', 'brand', 'sku', 'status', 'created_at', 'updated_at'
+]
+
+/**
  * Converts product data from camelCase to snake_case format
  * Handles special mappings and extracts non-column fields
+ * Preserves all valid database fields (snake_case) that aren't in the mapping
  * 
- * @param {Object} data - Product data in camelCase format
+ * @param {Object} data - Product data in camelCase or snake_case format
  * @returns {Object} - Object with converted data and extracted special fields
  * @returns {Object} converted - Converted product data in snake_case
  * @returns {Array} categories - Extracted categories array (not a column)
@@ -123,6 +148,27 @@ export const convertProductFields = (data) => {
     converted.featured = Boolean(converted.featured)
   }
 
-  result.converted = converted
+  // Filter out non-database fields (but preserve valid database columns)
+  // Only remove fields that are explicitly marked as non-database fields
+  // and are not valid database columns
+  const finalConverted = {}
+  for (const [key, value] of Object.entries(converted)) {
+    // Preserve if it's a valid database column
+    if (VALID_DATABASE_COLUMNS.includes(key)) {
+      finalConverted[key] = value
+    }
+    // Also preserve if it's not in the non-database fields list
+    // (handles edge cases where new fields might be added)
+    else if (!NON_DATABASE_FIELDS.includes(key)) {
+      // Only preserve if it looks like a database column (snake_case)
+      // This prevents preserving camelCase fields that weren't converted
+      if (key.includes('_') || key === key.toLowerCase()) {
+        finalConverted[key] = value
+      }
+    }
+    // Otherwise, filter it out (it's a non-database field)
+  }
+
+  result.converted = finalConverted
   return result
 }

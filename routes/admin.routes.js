@@ -1573,8 +1573,19 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Product not found' })
     }
 
+    // Log original request body for debugging
+    console.log('=== Product Update Request ===')
+    console.log('Product ID:', id)
+    console.log('Original request body:', JSON.stringify(updates, null, 2))
+
     // Convert camelCase fields to snake_case and extract special fields
     const { converted: dbUpdates, categories } = convertProductFields(updates)
+
+    // Log converted fields
+    console.log('Converted fields (after conversion):', JSON.stringify(dbUpdates, null, 2))
+    if (categories !== undefined) {
+      console.log('Categories (extracted):', categories)
+    }
 
     // Synchronize image fields: ensure main_image and image_url stay in sync
     // If main_image is updated, also update image_url (for backward compatibility)
@@ -1615,25 +1626,33 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
     // Check if we have any fields to update
     const fieldsToUpdate = Object.keys(dbUpdates).filter(key => dbUpdates[key] !== undefined)
     if (fieldsToUpdate.length === 0) {
+      console.error('No valid fields to update after conversion')
+      console.error('Original fields:', Object.keys(updates))
+      console.error('Converted fields:', Object.keys(dbUpdates))
       return res.status(400).json({ 
         error: 'No valid fields to update',
-        details: 'Please provide at least one field to update'
+        details: 'Please provide at least one field to update. Original fields: ' + Object.keys(updates).join(', ')
       })
     }
 
-    // Log the update for debugging
-    console.log('Updating product:', id, 'Fields:', fieldsToUpdate)
+    // Log final update payload
+    console.log('Final update payload:', JSON.stringify(dbUpdates, null, 2))
+    console.log('Fields to update:', fieldsToUpdate)
 
     // Update product
-    const { data, error } = await supabaseAdmin
+    const { data, error, count } = await supabaseAdmin
       .from('products')
       .update(dbUpdates)
       .eq('id', id)
       .select()
 
     if (error) {
-      console.error('Product update error:', error)
-      console.error('Update payload:', dbUpdates)
+      console.error('=== Product Update Error ===')
+      console.error('Error:', error)
+      console.error('Error code:', error.code)
+      console.error('Error message:', error.message)
+      console.error('Update payload:', JSON.stringify(dbUpdates, null, 2))
+      
       // Check if it's a "not found" error
       if (error.code === 'PGRST116' || error.message?.includes('No rows') || error.message?.includes('not found')) {
         return res.status(404).json({ 
@@ -1647,30 +1666,134 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
       })
     }
 
+    // Log update result
+    console.log('Update result - Rows affected:', count !== null ? count : 'unknown')
+    console.log('Update result - Data returned:', data ? data.length : 0, 'row(s)')
+
+    // If no data returned, try to fetch the product separately as fallback
     if (!data || data.length === 0) {
-      console.error('Update returned no data. Product ID:', id)
-      console.error('Update payload:', dbUpdates)
-      // Try to fetch the product to see if it still exists
+      console.warn('=== Update returned no data, attempting fallback fetch ===')
+      console.warn('Product ID:', id)
+      console.warn('Update payload:', JSON.stringify(dbUpdates, null, 2))
+      
+      // First, verify the product still exists
       const { data: checkData, error: checkErr } = await supabaseAdmin
         .from('products')
-        .select('id, name')
+        .select('id, name, updated_at')
         .eq('id', id)
         .maybeSingle()
       
       if (checkErr || !checkData) {
+        console.error('Product does not exist after update attempt')
         return res.status(404).json({ 
           error: 'Product not found',
           details: 'The product may have been deleted'
         })
       }
       
-      return res.status(500).json({ 
-        error: 'Product update returned no results',
-        details: 'The update may have failed silently. Please check the update payload and try again.'
+      // Product exists, so the update might have succeeded but select failed
+      // Try to fetch the full product data
+      const { data: fetchedProduct, error: fetchErr } = await supabaseAdmin
+        .from('products')
+        .select('*')
+        .eq('id', id)
+        .single()
+      
+      if (fetchErr || !fetchedProduct) {
+        console.error('Failed to fetch product after update:', fetchErr)
+        return res.status(500).json({ 
+          error: 'Product update may have succeeded but failed to retrieve updated data',
+          details: fetchErr?.message || 'Unknown error',
+          suggestion: 'Please check the product manually to verify the update'
+        })
+      }
+      
+      // Check if updated_at changed to verify update actually happened
+      const updateTimestamp = new Date(dbUpdates.updated_at).getTime()
+      const fetchedTimestamp = new Date(fetchedProduct.updated_at).getTime()
+      const timeDiff = Math.abs(fetchedTimestamp - updateTimestamp)
+      
+      if (timeDiff > 5000) { // More than 5 seconds difference suggests update didn't happen
+        console.warn('Update timestamp mismatch - update may not have occurred')
+        console.warn('Expected updated_at:', dbUpdates.updated_at)
+        console.warn('Actual updated_at:', fetchedProduct.updated_at)
+        return res.status(500).json({ 
+          error: 'Product update may have failed',
+          details: 'The update timestamp does not match. The product may not have been updated.',
+          product: normalizeProductImages(fetchedProduct)
+        })
+      }
+      
+      // Update likely succeeded, return the fetched product
+      console.log('Update succeeded (verified via fallback fetch)')
+      const updatedProduct = fetchedProduct
+      
+      // Continue with category updates if needed
+      if (categories !== undefined && Array.isArray(categories)) {
+        // Delete existing categories for this product
+        await supabaseAdmin
+          .from('product_categories')
+          .delete()
+          .eq('product_id', id)
+
+        // Insert new categories
+        if (categories.length > 0) {
+          const categoryInserts = categories
+            .filter(cat => cat && cat.trim())
+            .map(category => ({
+              product_id: id,
+              category: category.trim()
+            }))
+
+          if (categoryInserts.length > 0) {
+            const { error: categoryError } = await supabaseAdmin
+              .from('product_categories')
+              .insert(categoryInserts)
+
+            if (categoryError) {
+              console.error('Category update error:', categoryError)
+              return res.json({
+                message: 'Product updated successfully',
+                product: normalizeProductImages(updatedProduct),
+                warning: 'Product updated but categories update failed',
+                categoryError: categoryError.message
+              })
+            }
+          }
+        }
+      }
+
+      // Fetch product with categories for response
+      const { data: productWithCategories, error: fetchError } = await supabaseAdmin
+        .from('products')
+        .select(`
+          *,
+          product_categories (
+            category
+          )
+        `)
+        .eq('id', id)
+        .maybeSingle()
+
+      if (fetchError || !productWithCategories) {
+        if (fetchError) {
+          console.error('Error fetching product with categories:', fetchError)
+        }
+        return res.json({
+          message: 'Product updated successfully',
+          product: normalizeProductImages(updatedProduct)
+        })
+      }
+
+      console.log('=== Product Update Success ===')
+      return res.json({
+        message: 'Product updated successfully',
+        product: normalizeProductImages(productWithCategories)
       })
     }
 
     const updatedProduct = data[0]
+    console.log('=== Product Update Success ===')
 
     // Update product_categories junction table if categories are provided
     if (categories !== undefined && Array.isArray(categories)) {
@@ -1729,7 +1852,7 @@ router.put('/products/:id', checkAdmin, async (req, res) => {
       // Normalize image fields before returning
       return res.json({
         message: 'Product updated successfully',
-        product: normalizeProductImages(data)
+        product: normalizeProductImages(updatedProduct)
       })
     }
 
