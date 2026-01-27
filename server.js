@@ -77,6 +77,21 @@ app.get('/health', (req, res) => {
   })
 })
 
+// Paystack callback redirect handler
+// This catches Paystack redirects and forwards them to the frontend
+app.get('/payment/callback', (req, res) => {
+  const { reference, trxref } = req.query
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+  const paymentRef = reference || trxref || ''
+  
+  // Redirect to frontend callback page with reference
+  const redirectUrl = paymentRef 
+    ? `${frontendUrl}/payment/callback?reference=${paymentRef}`
+    : `${frontendUrl}/payment/callback`
+  
+  res.redirect(redirectUrl)
+})
+
 // API Routes
 app.use('/api/auth', authRoutes)
 app.use('/api/products', productRoutes)
