@@ -22,6 +22,7 @@ The database schema is optimized for a grocery and fresh fruits e-commerce platf
 
 - ✅ Row Level Security (RLS) policies for data protection
 - ✅ Auto-generated order numbers
+- ✅ Auto-generated tracking numbers (TRK-YYYY-XXXXXX format)
 - ✅ Automatic timestamp updates
 - ✅ Indexes optimized for dashboard queries
 - ✅ Views for daily sales summaries
@@ -48,6 +49,15 @@ The script will:
 - Create triggers for automatic updates
 - Configure Row Level Security policies
 - Create helpful views for reporting
+
+### Step 2.5: Run Migrations (Optional)
+
+If you need additional features, run the migration files in order:
+
+1. **Add tracking numbers to orders:**
+   - Open `database/migrations/add_tracking_number.sql`
+   - Copy and run in Supabase SQL Editor
+   - This adds auto-generated tracking numbers (format: TRK-YYYY-XXXXXX) to all new orders
 
 ### Step 3: Create an Admin User
 
