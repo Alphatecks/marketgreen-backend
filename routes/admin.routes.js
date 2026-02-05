@@ -3022,6 +3022,23 @@ router.post('/promotions', checkAdmin, async (req, res) => {
       })
     }
 
+    // If setting this promotion as active, deactivate all other promotions
+    // Only one promotion can be active at a time
+    if (isActive) {
+      const { error: deactivateError } = await supabaseAdmin
+        .from('promotions')
+        .update({ is_active: false })
+        .eq('is_active', true)
+
+      if (deactivateError) {
+        console.error('Error deactivating other promotions:', deactivateError)
+        return res.status(500).json({
+          error: 'Failed to deactivate other promotions',
+          details: deactivateError.message
+        })
+      }
+    }
+
     // Create promotion
     const promotionData = {
       header_text: headerText || null,
@@ -3135,6 +3152,24 @@ router.put('/promotions/:id', checkAdmin, async (req, res) => {
     }
     if (updates.isActive !== undefined) updateData.is_active = Boolean(updates.isActive)
     if (updates.displayOrder !== undefined) updateData.display_order = parseInt(updates.displayOrder)
+
+    // If setting this promotion as active, deactivate all other promotions
+    // Only one promotion can be active at a time
+    if (updates.isActive === true) {
+      const { error: deactivateError } = await supabaseAdmin
+        .from('promotions')
+        .update({ is_active: false })
+        .eq('is_active', true)
+        .neq('id', id) // Don't deactivate the current promotion
+
+      if (deactivateError) {
+        console.error('Error deactivating other promotions:', deactivateError)
+        return res.status(500).json({
+          error: 'Failed to deactivate other promotions',
+          details: deactivateError.message
+        })
+      }
+    }
 
     // Add updated_at timestamp
     updateData.updated_at = new Date().toISOString()
