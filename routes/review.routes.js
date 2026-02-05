@@ -148,8 +148,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email format' })
     }
 
-    // Check if user has already reviewed this product
-    const { data: existingReview, error: checkError } = await supabase
+    // Check if user has already reviewed this product (use admin client to bypass RLS)
+    const { data: existingReview, error: checkError } = await supabaseAdmin
       .from('reviews')
       .select('id')
       .eq('product_id', productId)
@@ -169,6 +169,7 @@ router.post('/', async (req, res) => {
     }
 
     // Create review (status will be 'pending' by default, needs admin approval)
+    // Use admin client to bypass RLS, but we've already validated the user is authenticated
     const reviewData = {
       product_id: productId,
       user_id: user.id,
@@ -179,7 +180,7 @@ router.post('/', async (req, res) => {
       status: 'pending' // Reviews need admin approval
     }
 
-    const { data: review, error: createError } = await supabase
+    const { data: review, error: createError } = await supabaseAdmin
       .from('reviews')
       .insert([reviewData])
       .select()
@@ -221,8 +222,8 @@ router.post('/:id/helpful', async (req, res) => {
       return res.status(400).json({ error: 'Invalid review ID format' })
     }
 
-    // Check if review exists and is approved
-    const { data: review, error: checkError } = await supabase
+    // Check if review exists and is approved (use admin client to bypass RLS)
+    const { data: review, error: checkError } = await supabaseAdmin
       .from('reviews')
       .select('id, helpful_count, status')
       .eq('id', id)
@@ -236,8 +237,8 @@ router.post('/:id/helpful', async (req, res) => {
       return res.status(400).json({ error: 'Only approved reviews can be marked as helpful' })
     }
 
-    // Increment helpful count
-    const { data: updatedReview, error: updateError } = await supabase
+    // Increment helpful count (use admin client to bypass RLS)
+    const { data: updatedReview, error: updateError } = await supabaseAdmin
       .from('reviews')
       .update({
         helpful_count: (review.helpful_count || 0) + 1,
@@ -282,8 +283,8 @@ router.get('/my-reviews', async (req, res) => {
 
     const { limit = 50, offset = 0 } = req.query
 
-    // Get user's reviews with product information
-    const { data, error, count } = await supabase
+    // Get user's reviews with product information (use admin client to bypass RLS)
+    const { data, error, count } = await supabaseAdmin
       .from('reviews')
       .select(`
         *,
