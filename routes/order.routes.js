@@ -117,22 +117,26 @@ router.get('/', async (req, res) => {
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(token)
 
-    if (authError) {
-      return res.status(401).json({ error: authError.message })
+    if (authError || !user) {
+      return res.status(401).json({ error: authError?.message || 'Invalid or expired token' })
     }
 
-    const { data, error } = await supabase
+    // Use admin client to fetch orders with proper user filtering
+    // This ensures we get all orders for the user regardless of RLS
+    const { data, error } = await supabaseAdmin
       .from('orders')
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
 
     if (error) {
+      console.error('Error fetching user orders:', error)
       return res.status(400).json({ error: error.message })
     }
 
-    res.json(data)
+    res.json(data || [])
   } catch (error) {
+    console.error('Get user orders error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -149,23 +153,25 @@ router.get('/:id', async (req, res) => {
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(token)
 
-    if (authError) {
-      return res.status(401).json({ error: authError.message })
+    if (authError || !user) {
+      return res.status(401).json({ error: authError?.message || 'Invalid or expired token' })
     }
 
-    const { data, error } = await supabase
+    // Use admin client to fetch order with proper user filtering
+    const { data, error } = await supabaseAdmin
       .from('orders')
       .select('*')
       .eq('id', id)
       .eq('user_id', user.id)
       .single()
 
-    if (error) {
+    if (error || !data) {
       return res.status(404).json({ error: 'Order not found' })
     }
 
     res.json(data)
   } catch (error) {
+    console.error('Get single order error:', error)
     res.status(500).json({ error: error.message })
   }
 })
