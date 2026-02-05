@@ -54,15 +54,39 @@ router.get('/', async (req, res) => {
     }
 
     // Filter for non-expired promotions
+    // If countdown_end_date is null/empty, promotion is always valid (no expiration)
+    // If countdown_end_date is set, only show if it's in the future
     const now = new Date()
     const validPromotions = activePromotions.filter(promo => {
-      if (!promo.countdown_end_date) {
-        console.log('Promotion has no countdown date:', promo.id, promo.main_title)
+      // If no countdown date (null or empty string), promotion is always valid
+      if (!promo.countdown_end_date || promo.countdown_end_date.trim() === '') {
+        console.log('Promotion has no countdown date (always valid, no expiration):', promo.id, promo.main_title)
         return true
       }
+      
+      // Parse the countdown end date
       const endDate = new Date(promo.countdown_end_date)
+      
+      // Check if date is valid
+      if (isNaN(endDate.getTime())) {
+        console.log('Promotion has invalid countdown date (treating as no expiration):', promo.id, promo.main_title, promo.countdown_end_date)
+        return true // Treat invalid dates as no expiration
+      }
+      
+      // Compare dates (promotion is valid if end date is in the future)
       const isValid = endDate > now
-      console.log('Promotion countdown check:', promo.id, promo.main_title, 'End:', endDate, 'Now:', now, 'Valid:', isValid)
+      const timeDiffMs = endDate.getTime() - now.getTime()
+      const timeDiffHours = Math.floor(timeDiffMs / (1000 * 60 * 60))
+      
+      console.log('Promotion countdown check:', {
+        id: promo.id,
+        title: promo.main_title,
+        endDate: endDate.toISOString(),
+        now: now.toISOString(),
+        isValid: isValid,
+        timeDiffHours: timeDiffHours,
+        expired: !isValid
+      })
       return isValid
     })
 
@@ -76,26 +100,43 @@ router.get('/', async (req, res) => {
     // Return single promotion or null
     if (!promotion) {
       console.log('No valid promotion found after filtering')
+      
+      // Get details about why promotions were filtered out
+      const filteredDetails = activePromotions.map(p => ({
+        id: p.id,
+        mainTitle: p.main_title,
+        isActive: p.is_active,
+        countdownEndDate: p.countdown_end_date,
+        countdownStatus: !p.countdown_end_date 
+          ? 'no_countdown' 
+          : (() => {
+              const endDate = new Date(p.countdown_end_date)
+              if (isNaN(endDate.getTime())) return 'invalid_date'
+              return endDate > now ? 'valid' : 'expired'
+            })()
+      }))
+      
       return res.json({
         promotion: null,
         debug: {
           totalPromotions: allPromotions?.length || 0,
           activePromotions: activePromotions.length,
-          validPromotions: 0
+          validPromotions: 0,
+          filteredDetails: filteredDetails,
+          currentTime: now.toISOString()
         }
       })
     }
 
     console.log('Returning promotion:', promotion.id, promotion.main_title)
 
-    // Format response for frontend
+    // Format response for frontend - return promotion data (pictures, title, details)
     res.json({
       promotion: {
         id: promotion.id,
         headerText: promotion.header_text,
         subtitle: promotion.subtitle,
         mainTitle: promotion.main_title,
-        countdownEndDate: promotion.countdown_end_date,
         buttonText: promotion.button_text || 'SHOP NOW',
         buttonLink: promotion.button_link || '/products',
         productImage: promotion.product_image,
