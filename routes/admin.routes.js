@@ -1925,4 +1925,439 @@ router.delete('/products/:id', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// CUSTOMERS MANAGEMENT
+// ============================================
+
+// Get customer metrics (Total Customers, New Customers, Visitors)
+router.get('/customers/metrics', checkAdmin, async (req, res) => {
+  try {
+    const now = new Date()
+    const endDate = new Date(now)
+    endDate.setHours(23, 59, 59, 999) // End of today
+
+    const startDate = new Date(now)
+    startDate.setDate(startDate.getDate() - 7)
+    startDate.setHours(0, 0, 0, 0) // Start of day 7 days ago
+
+    const previousStartDate = new Date(startDate)
+    previousStartDate.setDate(previousStartDate.getDate() - 7)
+
+    // Total Customers: Count of all profiles where role != 'admin'
+    const { count: totalCustomers, error: totalCustomersError } = await supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .neq('role', 'admin')
+      .lte('created_at', endDate.toISOString())
+
+    // Previous period total customers
+    const { count: previousTotalCustomers, error: previousTotalCustomersError } = await supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .neq('role', 'admin')
+      .lte('created_at', startDate.toISOString())
+
+    // New Customers: Count of profiles created in last 7 days (excluding admins)
+    const { count: newCustomers, error: newCustomersError } = await supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .neq('role', 'admin')
+      .gte('created_at', startDate.toISOString())
+      .lte('created_at', endDate.toISOString())
+
+    // Previous period new customers
+    const { count: previousNewCustomers, error: previousNewCustomersError } = await supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .neq('role', 'admin')
+      .gte('created_at', previousStartDate.toISOString())
+      .lt('created_at', startDate.toISOString())
+
+    // Visitors: Same as Total Customers (all unique registered users)
+    const visitors = totalCustomers || 0
+    const previousVisitors = previousTotalCustomers || 0
+
+    if (totalCustomersError || previousTotalCustomersError || newCustomersError || previousNewCustomersError) {
+      return res.status(500).json({ 
+        error: 'Error calculating customer metrics',
+        details: totalCustomersError?.message || previousTotalCustomersError?.message || newCustomersError?.message || previousNewCustomersError?.message
+      })
+    }
+
+    const totalCustomersChange = calculatePercentageChange(totalCustomers || 0, previousTotalCustomers || 0)
+    const newCustomersChange = calculatePercentageChange(newCustomers || 0, previousNewCustomers || 0)
+    const visitorsChange = calculatePercentageChange(visitors, previousVisitors)
+
+    res.json({
+      totalCustomers: {
+        value: totalCustomers || 0,
+        formatted: formatNumber(totalCustomers || 0),
+        change: parseFloat(totalCustomersChange.toFixed(1)),
+        changeType: totalCustomersChange >= 0 ? 'increase' : 'decrease',
+        previousValue: previousTotalCustomers || 0
+      },
+      newCustomers: {
+        value: newCustomers || 0,
+        formatted: formatNumber(newCustomers || 0),
+        change: parseFloat(newCustomersChange.toFixed(1)),
+        changeType: newCustomersChange >= 0 ? 'increase' : 'decrease',
+        previousValue: previousNewCustomers || 0
+      },
+      visitors: {
+        value: visitors,
+        formatted: formatNumber(visitors),
+        change: parseFloat(visitorsChange.toFixed(1)),
+        changeType: visitorsChange >= 0 ? 'increase' : 'decrease',
+        previousValue: previousVisitors
+      },
+      period: {
+        current: 'Last 7 days',
+        previous: 'Previous 7 days',
+        days: 7
+      }
+    })
+  } catch (error) {
+    console.error('Customer metrics error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get customer overview (Active, Repeat, Shop Visitor, Conversion Rate, weekly trends)
+router.get('/customers/overview', checkAdmin, async (req, res) => {
+  try {
+    const { period = 'thisWeek' } = req.query
+
+    // Calculate week boundaries
+    const now = new Date()
+    let weekStart, weekEnd
+
+    if (period === 'lastWeek') {
+      // Last week: 7 days ago to 14 days ago
+      weekEnd = new Date(now)
+      weekEnd.setDate(weekEnd.getDate() - 7)
+      weekEnd.setHours(23, 59, 59, 999)
+      
+      weekStart = new Date(weekEnd)
+      weekStart.setDate(weekStart.getDate() - 6)
+      weekStart.setHours(0, 0, 0, 0)
+    } else {
+      // This week: Today back to 7 days ago
+      weekEnd = new Date(now)
+      weekEnd.setHours(23, 59, 59, 999)
+      
+      weekStart = new Date(now)
+      weekStart.setDate(weekStart.getDate() - 6)
+      weekStart.setHours(0, 0, 0, 0)
+    }
+
+    // Active Customers: Users with at least one order in last 30 days
+    const thirtyDaysAgo = new Date(now)
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    thirtyDaysAgo.setHours(0, 0, 0, 0)
+
+    const { data: activeCustomersData, error: activeCustomersError } = await supabaseAdmin
+      .from('orders')
+      .select('user_id')
+      .gte('created_at', thirtyDaysAgo.toISOString())
+      .in('status', ['pending', 'processing', 'confirmed', 'shipped', 'delivered'])
+
+    if (activeCustomersError) {
+      return res.status(500).json({ 
+        error: 'Error calculating active customers',
+        details: activeCustomersError.message
+      })
+    }
+
+    const activeCustomersSet = new Set(activeCustomersData?.map(order => order.user_id) || [])
+    const activeCustomers = activeCustomersSet.size
+
+    // Repeat Customers: Users with 2+ orders (all time)
+    const { data: allOrders, error: allOrdersError } = await supabaseAdmin
+      .from('orders')
+      .select('user_id')
+      .in('status', ['pending', 'processing', 'confirmed', 'shipped', 'delivered'])
+
+    if (allOrdersError) {
+      return res.status(500).json({ 
+        error: 'Error calculating repeat customers',
+        details: allOrdersError.message
+      })
+    }
+
+    const orderCountsByUser = {}
+    allOrders?.forEach(order => {
+      orderCountsByUser[order.user_id] = (orderCountsByUser[order.user_id] || 0) + 1
+    })
+
+    const repeatCustomers = Object.values(orderCountsByUser).filter(count => count >= 2).length
+
+    // Shop Visitor: Total registered users (same as Total Customers)
+    const { count: shopVisitor, error: shopVisitorError } = await supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .neq('role', 'admin')
+
+    if (shopVisitorError) {
+      return res.status(500).json({ 
+        error: 'Error calculating shop visitors',
+        details: shopVisitorError.message
+      })
+    }
+
+    // Conversion Rate: (Users with orders / Total users) * 100
+    const usersWithOrders = new Set(allOrders?.map(order => order.user_id) || [])
+    const conversionRate = shopVisitor > 0 ? ((usersWithOrders.size / shopVisitor) * 100) : 0
+
+    // Trends: Daily customer counts for the selected week
+    const { data: weekOrders, error: weekOrdersError } = await supabaseAdmin
+      .from('orders')
+      .select('user_id, created_at')
+      .gte('created_at', weekStart.toISOString())
+      .lte('created_at', weekEnd.toISOString())
+      .in('status', ['pending', 'processing', 'confirmed', 'shipped', 'delivered'])
+
+    if (weekOrdersError) {
+      return res.status(500).json({ 
+        error: 'Error calculating trends',
+        details: weekOrdersError.message
+      })
+    }
+
+    // Group orders by day
+    const trendsByDate = {}
+    weekOrders?.forEach(order => {
+      const orderDate = new Date(order.created_at)
+      const dateKey = orderDate.toISOString().split('T')[0]
+      
+      if (!trendsByDate[dateKey]) {
+        trendsByDate[dateKey] = new Set()
+      }
+      trendsByDate[dateKey].add(order.user_id)
+    })
+
+    // Generate trends array for the week (Sun-Sat)
+    const trends = []
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    
+    for (let i = 0; i < 7; i++) {
+      const currentDate = new Date(weekStart)
+      currentDate.setDate(weekStart.getDate() + i)
+      const dateKey = currentDate.toISOString().split('T')[0]
+      const dayName = dayNames[currentDate.getDay()]
+      
+      trends.push({
+        day: dayName,
+        date: dateKey,
+        count: trendsByDate[dateKey] ? trendsByDate[dateKey].size : 0
+      })
+    }
+
+    res.json({
+      summary: {
+        activeCustomers: activeCustomers,
+        activeCustomersFormatted: formatNumber(activeCustomers),
+        repeatCustomers: repeatCustomers,
+        repeatCustomersFormatted: formatNumber(repeatCustomers),
+        shopVisitor: shopVisitor || 0,
+        shopVisitorFormatted: formatNumber(shopVisitor || 0),
+        conversionRate: parseFloat(conversionRate.toFixed(1))
+      },
+      trends: trends,
+      period: period
+    })
+  } catch (error) {
+    console.error('Customer overview error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get customers list with pagination, search, and sorting
+router.get('/customers', checkAdmin, async (req, res) => {
+  try {
+    const { 
+      limit = 50, 
+      offset = 0, 
+      search, 
+      status, 
+      sortBy = 'created_at', 
+      sortOrder = 'desc' 
+    } = req.query
+
+    // First, get ALL profiles ordered by created_at to establish global sequential IDs
+    const { data: allProfilesOrdered, error: allProfilesError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, created_at')
+      .neq('role', 'admin')
+      .order('created_at', { ascending: true })
+
+    if (allProfilesError) {
+      return res.status(500).json({ 
+        error: 'Error fetching customers',
+        details: allProfilesError.message
+      })
+    }
+
+    // Create a map of user_id -> sequential customer number (based on creation order)
+    const customerIdMap = {}
+    allProfilesOrdered?.forEach((profile, index) => {
+      customerIdMap[profile.id] = index + 1
+    })
+
+    // Build base query for profiles (excluding admins) with filters
+    let profilesQuery = supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, email, phone, created_at', { count: 'exact' })
+      .neq('role', 'admin')
+
+    // Apply search filter
+    if (search) {
+      profilesQuery = profilesQuery.or(
+        `full_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%`
+      )
+    }
+
+    // Get filtered profiles (we need to calculate order stats)
+    const { data: allProfiles, error: profilesError, count: totalCount } = await profilesQuery
+
+    if (profilesError) {
+      return res.status(500).json({ 
+        error: 'Error fetching customers',
+        details: profilesError.message
+      })
+    }
+
+    if (!allProfiles || allProfiles.length === 0) {
+      return res.json({
+        customers: [],
+        total: 0,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: false
+      })
+    }
+
+    // Get all orders to calculate stats per customer
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    thirtyDaysAgo.setHours(0, 0, 0, 0)
+
+    const { data: allOrders, error: ordersError } = await supabaseAdmin
+      .from('orders')
+      .select('user_id, total_amount, created_at, status')
+      .in('status', ['pending', 'processing', 'confirmed', 'shipped', 'delivered'])
+
+    if (ordersError) {
+      return res.status(500).json({ 
+        error: 'Error fetching orders',
+        details: ordersError.message
+      })
+    }
+
+    // Calculate order stats per customer
+    const customerStats = {}
+    allOrders?.forEach(order => {
+      const userId = order.user_id
+      if (!customerStats[userId]) {
+        customerStats[userId] = {
+          orderCount: 0,
+          totalSpend: 0,
+          hasRecentOrder: false
+        }
+      }
+      customerStats[userId].orderCount++
+      customerStats[userId].totalSpend += parseFloat(order.total_amount || 0)
+      
+      // Check if order is within last 30 days
+      const orderDate = new Date(order.created_at)
+      if (orderDate >= thirtyDaysAgo) {
+        customerStats[userId].hasRecentOrder = true
+      }
+    })
+
+    // Map profiles with stats
+    let customers = allProfiles.map((profile) => {
+      const stats = customerStats[profile.id] || { orderCount: 0, totalSpend: 0, hasRecentOrder: false }
+      
+      // Determine status
+      const isActive = stats.hasRecentOrder
+      const customerStatus = isActive ? 'Active' : 'Inactive'
+      const statusColor = isActive ? 'green' : 'grey'
+
+      // Format customer ID as #CUST + sequential number (based on global creation order)
+      const sequentialNumber = customerIdMap[profile.id] || 0
+      const customerId = `#CUST${String(sequentialNumber).padStart(3, '0')}`
+
+      return {
+        id: profile.id,
+        customerId: customerId,
+        name: profile.full_name || 'N/A',
+        phone: profile.phone || 'N/A',
+        email: profile.email || 'N/A',
+        orderCount: stats.orderCount,
+        totalSpend: stats.totalSpend,
+        totalSpendFormatted: formatCurrency(stats.totalSpend),
+        status: customerStatus,
+        statusColor: statusColor,
+        createdAt: profile.created_at
+      }
+    })
+
+    // Apply status filter
+    if (status) {
+      customers = customers.filter(customer => {
+        if (status === 'active') {
+          return customer.status === 'Active'
+        } else if (status === 'inactive') {
+          return customer.status === 'Inactive'
+        }
+        return true
+      })
+    }
+
+    // Apply sorting
+    customers.sort((a, b) => {
+      let aValue, bValue
+
+      switch (sortBy) {
+        case 'order_count':
+          aValue = a.orderCount
+          bValue = b.orderCount
+          break
+        case 'total_spend':
+          aValue = a.totalSpend
+          bValue = b.totalSpend
+          break
+        case 'created_at':
+        default:
+          aValue = new Date(a.createdAt).getTime()
+          bValue = new Date(b.createdAt).getTime()
+          break
+      }
+
+      if (sortOrder === 'asc') {
+        return aValue > bValue ? 1 : aValue < bValue ? -1 : 0
+      } else {
+        return aValue < bValue ? 1 : aValue > bValue ? -1 : 0
+      }
+    })
+
+    // Apply pagination
+    const paginatedCustomers = customers.slice(
+      parseInt(offset), 
+      parseInt(offset) + parseInt(limit)
+    )
+
+    res.json({
+      customers: paginatedCustomers,
+      total: customers.length, // Total after filters
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (parseInt(offset) + parseInt(limit)) < customers.length
+    })
+  } catch (error) {
+    console.error('Customers list error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
