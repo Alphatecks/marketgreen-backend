@@ -3644,4 +3644,165 @@ router.post('/reviews/bulk-action', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// ORDER MANAGEMENT
+// ============================================
+
+// Update order status (admin only)
+router.put('/orders/:id/status', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+    const { status, trackingNumber, notes } = req.body
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid order ID format' })
+    }
+
+    // Validate status
+    const validStatuses = ['pending', 'processing', 'confirmed', 'shipped', 'delivered', 'canceled', 'refunded']
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        error: 'Invalid status',
+        validStatuses: validStatuses
+      })
+    }
+
+    // Check if order exists
+    const { data: order, error: checkError } = await supabaseAdmin
+      .from('orders')
+      .select('id, status, order_number')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !order) {
+      return res.status(404).json({ error: 'Order not found' })
+    }
+
+    // Prepare update data
+    const updateData = {
+      status: status,
+      updated_at: new Date().toISOString()
+    }
+
+    // Handle status-specific fields
+    if (status === 'shipped') {
+      // If tracking number is provided, update it
+      if (trackingNumber) {
+        updateData.tracking_number = trackingNumber.trim()
+      }
+    }
+
+    if (status === 'delivered') {
+      // Set delivered_at timestamp
+      updateData.delivered_at = new Date().toISOString()
+    }
+
+    if (status === 'canceled') {
+      // Set canceled_at timestamp
+      updateData.canceled_at = new Date().toISOString()
+      // Optionally set canceled_reason if provided
+      if (notes) {
+        updateData.canceled_reason = notes.trim()
+      }
+    } else {
+      // Clear canceled_at if status changes from canceled to something else
+      if (order.status === 'canceled') {
+        updateData.canceled_at = null
+        updateData.canceled_reason = null
+      }
+    }
+
+    // Update admin notes if provided
+    if (notes && status !== 'canceled') {
+      updateData.admin_notes = notes.trim()
+    }
+
+    // Update order
+    const { data: updatedOrder, error: updateError } = await supabaseAdmin
+      .from('orders')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Error updating order status:', updateError)
+      return res.status(500).json({
+        error: 'Failed to update order status',
+        details: updateError.message
+      })
+    }
+
+    res.json({
+      message: 'Order status updated successfully',
+      order: {
+        id: updatedOrder.id,
+        orderNumber: updatedOrder.order_number,
+        status: updatedOrder.status,
+        paymentStatus: updatedOrder.payment_status,
+        trackingNumber: updatedOrder.tracking_number,
+        deliveredAt: updatedOrder.delivered_at,
+        canceledAt: updatedOrder.canceled_at,
+        updatedAt: updatedOrder.updated_at
+      }
+    })
+  } catch (error) {
+    console.error('Update order status error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete order (admin only)
+router.delete('/orders/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid order ID format' })
+    }
+
+    // Check if order exists
+    const { data: order, error: checkError } = await supabaseAdmin
+      .from('orders')
+      .select('id, order_number, status, total_amount')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !order) {
+      return res.status(404).json({ error: 'Order not found' })
+    }
+
+    // Delete order (this will cascade delete order_items if they exist)
+    const { error: deleteError } = await supabaseAdmin
+      .from('orders')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      console.error('Error deleting order:', deleteError)
+      return res.status(500).json({
+        error: 'Failed to delete order',
+        details: deleteError.message
+      })
+    }
+
+    res.json({
+      message: 'Order deleted successfully',
+      deletedOrder: {
+        id: order.id,
+        orderNumber: order.order_number,
+        status: order.status,
+        totalAmount: order.total_amount
+      }
+    })
+  } catch (error) {
+    console.error('Delete order error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
