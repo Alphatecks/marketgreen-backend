@@ -3,6 +3,22 @@ import { supabase, supabaseAdmin } from '../config/supabase.js'
 
 const router = express.Router()
 
+// Helper function to normalize image fields in product responses
+// Ensures main_image and image_url are always synchronized
+const normalizeProductImages = (product) => {
+  if (!product) return product
+  
+  // Prioritize main_image over image_url
+  const imageUrl = product.main_image || product.image_url || null
+  
+  // Ensure both fields have the same value
+  return {
+    ...product,
+    main_image: imageUrl,
+    image_url: imageUrl
+  }
+}
+
 // Get user's cart
 router.get('/', async (req, res) => {
   try {
@@ -48,7 +64,8 @@ router.get('/', async (req, res) => {
 
     // Format cart items for frontend
     const formattedCart = (cartItems || []).map(item => {
-      const product = item.products
+      // Normalize product images to ensure main_image and image_url are synchronized
+      const product = normalizeProductImages(item.products)
       const price = product?.current_price || product?.price || 0
       const originalPrice = product?.original_price || price
       const subtotal = parseFloat(price) * item.quantity
@@ -63,7 +80,7 @@ router.get('/', async (req, res) => {
           price: parseFloat(price),
           originalPrice: parseFloat(originalPrice),
           discountPercentage: product?.discount_percentage || 0,
-          image: product?.main_image || product?.image_url,
+          image: product?.main_image || product?.image_url || null,
           stockStatus: product?.stock_status,
           stock: product?.stock || 0,
           productStatus: product?.product_status
