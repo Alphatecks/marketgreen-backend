@@ -130,7 +130,6 @@ router.put('/profile', async (req, res) => {
 
     // Get current profile to build full_name if first_name or last_name are being updated
     if (firstName !== undefined || lastName !== undefined) {
-      shouldUpdateFullName = true
       // Get current profile values
       const { data: currentProfile } = await supabaseAdmin
         .from('profiles')
