@@ -48,6 +48,7 @@ router.get('/', async (req, res) => {
           discount_percentage,
           main_image,
           image_url,
+          additional_images,
           stock_status,
           stock,
           product_status,
@@ -64,8 +65,45 @@ router.get('/', async (req, res) => {
 
     // Format cart items for frontend
     const formattedCart = (cartItems || []).map(item => {
+      // Handle product data - Supabase nested queries return products as object
+      let product = item.products
+      
+      // If product is null or undefined, fetch it separately
+      if (!product) {
+        console.warn(`Product not found for cart item ${item.id}, product_id: ${item.product_id}`)
+        return {
+          id: item.id,
+          productId: item.product_id,
+          product: null,
+          quantity: item.quantity,
+          subtotal: 0,
+          createdAt: item.created_at,
+          updatedAt: item.updated_at
+        }
+      }
+      
       // Normalize product images to ensure main_image and image_url are synchronized
-      const product = normalizeProductImages(item.products)
+      product = normalizeProductImages(product)
+      
+      // Get image URL - prioritize main_image, fallback to image_url, then first additional image
+      let imageUrl = product?.main_image || product?.image_url || null
+      
+      // If no main image, try to get first additional image
+      if (!imageUrl && product?.additional_images && Array.isArray(product.additional_images) && product.additional_images.length > 0) {
+        imageUrl = product.additional_images[0]
+      }
+      
+      // Debug: Log if image is still missing
+      if (!imageUrl) {
+        console.warn(`No image found for product ${product?.id || 'unknown'} in cart item ${item.id}`, {
+          hasProduct: !!product,
+          main_image: product?.main_image,
+          image_url: product?.image_url,
+          hasAdditionalImages: !!product?.additional_images,
+          additionalImagesCount: product?.additional_images?.length || 0
+        })
+      }
+      
       const price = product?.current_price || product?.price || 0
       const originalPrice = product?.original_price || price
       const subtotal = parseFloat(price) * item.quantity
@@ -80,7 +118,7 @@ router.get('/', async (req, res) => {
           price: parseFloat(price),
           originalPrice: parseFloat(originalPrice),
           discountPercentage: product?.discount_percentage || 0,
-          image: product?.main_image || product?.image_url || null,
+          image: imageUrl,
           stockStatus: product?.stock_status,
           stock: product?.stock || 0,
           productStatus: product?.product_status
@@ -90,7 +128,7 @@ router.get('/', async (req, res) => {
         createdAt: item.created_at,
         updatedAt: item.updated_at
       }
-    })
+    }).filter(item => item !== null && item.product !== null) // Filter out items with missing products
 
     // Calculate totals
     const total = formattedCart.reduce((sum, item) => sum + item.subtotal, 0)
