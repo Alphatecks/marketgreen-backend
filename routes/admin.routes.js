@@ -2360,4 +2360,78 @@ router.get('/customers', checkAdmin, async (req, res) => {
   }
 })
 
+// Delete a customer
+router.delete('/customers/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid customer ID format' })
+    }
+
+    // Check if customer exists and is not an admin
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, email, role')
+      .eq('id', id)
+      .single()
+
+    if (profileError) {
+      // Check if it's a "not found" error
+      if (profileError.code === 'PGRST116' || profileError.message?.includes('No rows') || profileError.message?.includes('not found')) {
+        return res.status(404).json({ error: 'Customer not found' })
+      }
+      console.error('Error fetching customer:', profileError)
+      return res.status(500).json({ 
+        error: 'Failed to fetch customer',
+        details: profileError.message 
+      })
+    }
+
+    if (!profile) {
+      return res.status(404).json({ error: 'Customer not found' })
+    }
+
+    // Prevent deletion of admin users
+    if (profile.role === 'admin') {
+      return res.status(403).json({ 
+        error: 'Cannot delete admin users',
+        message: 'Admin accounts cannot be deleted through this endpoint'
+      })
+    }
+
+    // Delete the user from auth.users (this will cascade delete profile and orders)
+    if (!supabaseAdmin) {
+      return res.status(500).json({ 
+        error: 'Service role key not configured',
+        message: 'SUPABASE_SERVICE_ROLE_KEY must be set to delete users'
+      })
+    }
+
+    const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(id)
+
+    if (deleteError) {
+      console.error('Error deleting customer:', deleteError)
+      return res.status(500).json({ 
+        error: 'Failed to delete customer',
+        details: deleteError.message 
+      })
+    }
+
+    res.json({
+      message: 'Customer deleted successfully',
+      deletedCustomer: {
+        id: profile.id,
+        name: profile.full_name || 'N/A',
+        email: profile.email || 'N/A'
+      }
+    })
+  } catch (error) {
+    console.error('Delete customer error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
