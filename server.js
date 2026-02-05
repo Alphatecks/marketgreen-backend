@@ -15,6 +15,7 @@ import paymentRoutes from './routes/payment.routes.js'
 import couponRoutes from './routes/coupon.routes.js'
 import promotionRoutes from './routes/promotion.routes.js'
 import reviewRoutes from './routes/review.routes.js'
+import cartRoutes from './routes/cart.routes.js'
 
 // Load environment variables
 dotenv.config()
@@ -105,6 +106,7 @@ app.use('/api/payments', paymentRoutes)
 app.use('/api/coupons', couponRoutes)
 app.use('/api/promotions', promotionRoutes)
 app.use('/api/reviews', reviewRoutes)
+app.use('/api/cart', cartRoutes)
 
 // 404 handler
 app.use((req, res) => {

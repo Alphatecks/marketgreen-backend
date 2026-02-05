@@ -1,6 +1,6 @@
 import express from 'express'
 import { supabase, supabaseAdmin } from '../config/supabase.js'
-import { validateEmail } from '../utils/validation.js'
+import { validateEmail, validatePassword } from '../utils/validation.js'
 
 const router = express.Router()
 
@@ -210,6 +210,73 @@ router.put('/profile', async (req, res) => {
     res.json(data)
   } catch (error) {
     console.error('Update profile error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Change password
+router.put('/change-password', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '')
+
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' })
+    }
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+
+    if (authError || !user) {
+      return res.status(401).json({ error: authError?.message || 'Invalid or expired token' })
+    }
+
+    const { currentPassword, newPassword } = req.body
+
+    // Validate required fields
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ 
+        error: 'Current password and new password are required' 
+      })
+    }
+
+    // Validate new password
+    const passwordValidation = validatePassword(newPassword)
+    if (!passwordValidation.isValid) {
+      return res.status(400).json({ 
+        error: 'Password does not meet requirements',
+        requirements: passwordValidation.errors
+      })
+    }
+
+    // Verify current password by attempting to sign in
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword
+    })
+
+    if (verifyError) {
+      return res.status(401).json({ 
+        error: 'Current password is incorrect' 
+      })
+    }
+
+    // Update password using Supabase auth
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword
+    })
+
+    if (updateError) {
+      console.error('Error updating password:', updateError)
+      return res.status(400).json({ 
+        error: 'Failed to update password',
+        details: updateError.message
+      })
+    }
+
+    res.json({
+      message: 'Password updated successfully'
+    })
+  } catch (error) {
+    console.error('Change password error:', error)
     res.status(500).json({ error: error.message })
   }
 })
