@@ -33,44 +33,15 @@ router.get('/', async (req, res) => {
       })
     }
 
-    // Get active promotions
+    // Get active promotions (ignore countdown_end_date - we're not using countdown timers)
     const activePromotions = (allPromotions || []).filter(p => p.is_active === true)
 
     if (activePromotions.length === 0) {
       return res.json({ promotion: null })
     }
 
-    // Filter for non-expired promotions
-    // If countdown_end_date is null/empty, promotion is always valid (no expiration)
-    // If countdown_end_date is set, only show if it's in the future
-    const now = new Date()
-    const validPromotions = activePromotions.filter(promo => {
-      // If no countdown date (null or empty string), promotion is always valid
-      if (!promo.countdown_end_date || promo.countdown_end_date.trim() === '') {
-        return true
-      }
-      
-      // Parse the countdown end date
-      const endDate = new Date(promo.countdown_end_date)
-      
-      // Check if date is valid
-      if (isNaN(endDate.getTime())) {
-        return true // Treat invalid dates as no expiration
-      }
-      
-      // Compare dates (promotion is valid if end date is in the future)
-      return endDate > now
-    })
-
-    // Get the most recent one
-    const promotion = validPromotions.length > 0 
-      ? validPromotions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0]
-      : null
-
-    // Return single promotion or null
-    if (!promotion) {
-      return res.json({ promotion: null })
-    }
+    // Get the most recent active promotion
+    const promotion = activePromotions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0]
 
     // Format response for frontend - return all promotion data (pictures, title, details)
     res.json({
