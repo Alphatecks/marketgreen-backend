@@ -3122,9 +3122,18 @@ router.put('/promotions/:id', checkAdmin, async (req, res) => {
     // Prepare update data
     const updateData = {}
     
-    if (updates.headerText !== undefined) updateData.header_text = updates.headerText
-    if (updates.subtitle !== undefined) updateData.subtitle = updates.subtitle
-    if (updates.mainTitle !== undefined) updateData.main_title = updates.mainTitle?.trim()
+    if (updates.headerText !== undefined) {
+      // Convert empty string to null to clear the field
+      updateData.header_text = updates.headerText?.trim() || null
+    }
+    if (updates.subtitle !== undefined) {
+      // Convert empty string to null to clear the field
+      updateData.subtitle = updates.subtitle?.trim() || null
+    }
+    if (updates.mainTitle !== undefined) {
+      // Main title is required, so keep trimmed value (empty string allowed for validation)
+      updateData.main_title = updates.mainTitle?.trim()
+    }
     if (updates.countdownEndDate !== undefined) {
       if (updates.countdownEndDate) {
         const countdownDate = new Date(updates.countdownEndDate)
@@ -3140,8 +3149,14 @@ router.put('/promotions/:id', checkAdmin, async (req, res) => {
     }
     if (updates.buttonText !== undefined) updateData.button_text = updates.buttonText
     if (updates.buttonLink !== undefined) updateData.button_link = updates.buttonLink
-    if (updates.productImage !== undefined) updateData.product_image = updates.productImage
-    if (updates.backgroundImage !== undefined) updateData.background_image = updates.backgroundImage
+    if (updates.productImage !== undefined) {
+      // Convert empty string to null to clear the image
+      updateData.product_image = updates.productImage?.trim() || null
+    }
+    if (updates.backgroundImage !== undefined) {
+      // Convert empty string to null to clear the image
+      updateData.background_image = updates.backgroundImage?.trim() || null
+    }
     if (updates.backgroundColor !== undefined) {
       if (!/^#[0-9A-F]{6}$/i.test(updates.backgroundColor)) {
         return res.status(400).json({
