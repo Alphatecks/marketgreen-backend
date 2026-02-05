@@ -80,3 +80,55 @@ export const validateUsername = (username) => {
   return { isValid: true }
 }
 
+/**
+ * Full name validation
+ */
+export const validateFullName = (fullName) => {
+  if (!fullName) {
+    return { isValid: false, error: 'Full name is required' }
+  }
+
+  if (fullName.trim().length < 2) {
+    return { isValid: false, error: 'Full name must be at least 2 characters' }
+  }
+
+  if (fullName.length > 255) {
+    return { isValid: false, error: 'Full name must be less than 255 characters' }
+  }
+
+  // Allow letters, spaces, hyphens, and apostrophes
+  const nameRegex = /^[a-zA-Z\s\-']+$/
+  if (!nameRegex.test(fullName.trim())) {
+    return { isValid: false, error: 'Full name can only contain letters, spaces, hyphens, and apostrophes' }
+  }
+
+  return { isValid: true }
+}
+
+/**
+ * Phone number validation
+ */
+export const validatePhone = (phone) => {
+  if (!phone) {
+    return { isValid: false, error: 'Phone number is required' }
+  }
+
+  // Remove common formatting characters
+  const cleanedPhone = phone.replace(/[\s\-\(\)\+]/g, '')
+
+  // Check if it's all digits
+  if (!/^\d+$/.test(cleanedPhone)) {
+    return { isValid: false, error: 'Phone number must contain only digits and formatting characters' }
+  }
+
+  // Check length (between 10 and 15 digits is reasonable for international numbers)
+  if (cleanedPhone.length < 10) {
+    return { isValid: false, error: 'Phone number must be at least 10 digits' }
+  }
+
+  if (cleanedPhone.length > 15) {
+    return { isValid: false, error: 'Phone number must be less than 15 digits' }
+  }
+
+  return { isValid: true }
+}

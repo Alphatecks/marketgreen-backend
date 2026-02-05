@@ -1,6 +1,6 @@
 import express from 'express'
 import { supabase } from '../config/supabase.js'
-import { validatePassword, validateEmail, validateUsername } from '../utils/validation.js'
+import { validatePassword, validateEmail, validateUsername, validateFullName, validatePhone } from '../utils/validation.js'
 
 const router = express.Router()
 
@@ -8,20 +8,20 @@ const router = express.Router()
 router.get('/signup', (req, res) => {
   res.status(405).json({
     error: 'Method Not Allowed',
-    message: 'This endpoint only accepts POST requests. Please use POST with email, username, and password in the request body.',
+    message: 'This endpoint only accepts POST requests. Please use POST with email, username, password, fullName, and phone in the request body.',
     method: 'POST',
     endpoint: '/api/auth/signup',
-    requiredFields: ['email', 'username', 'password']
+    requiredFields: ['email', 'username', 'password', 'fullName', 'phone']
   })
 })
 
 // Signup endpoint - matches the UI form
 router.post('/signup', async (req, res) => {
   // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:8',message:'Signup route - request received',data:{hasEmail:!!req.body.email,hasUsername:!!req.body.username,hasPassword:!!req.body.password,emailPrefix:req.body.email?.substring(0,10)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:8',message:'Signup route - request received',data:{hasEmail:!!req.body.email,hasUsername:!!req.body.username,hasPassword:!!req.body.password,hasFullName:!!req.body.fullName,hasPhone:!!req.body.phone,emailPrefix:req.body.email?.substring(0,10)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
   // #endregion
   try {
-    const { email, username, password, marketingEmails } = req.body
+    const { email, username, password, fullName, phone, marketingEmails } = req.body
 
     // Validate email
     const emailValidation = validateEmail(email)
@@ -60,6 +60,24 @@ router.post('/signup', async (req, res) => {
       })
     }
 
+    // Validate full name
+    const fullNameValidation = validateFullName(fullName)
+    if (!fullNameValidation.isValid) {
+      return res.status(400).json({ 
+        error: fullNameValidation.error,
+        field: 'fullName'
+      })
+    }
+
+    // Validate phone
+    const phoneValidation = validatePhone(phone)
+    if (!phoneValidation.isValid) {
+      return res.status(400).json({ 
+        error: phoneValidation.error,
+        field: 'phone'
+      })
+    }
+
     // #region agent log
     fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:40',message:'Signup - before Supabase call',data:{hasSupabaseClient:!!supabase,frontendUrl:process.env.FRONTEND_URL||'http://localhost:5173'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
     // #endregion
@@ -71,6 +89,8 @@ router.post('/signup', async (req, res) => {
       options: {
         data: {
           username: username,
+          full_name: fullName.trim(),
+          phone: phone,
           marketing_emails: marketingEmails || false
         },
         emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
@@ -108,6 +128,8 @@ router.post('/signup', async (req, res) => {
           id: data.user.id,
           username: username,
           email: email,
+          full_name: fullName.trim(),
+          phone: phone,
           marketing_emails: marketingEmails || false,
           created_at: new Date().toISOString()
         })
@@ -133,7 +155,9 @@ router.post('/signup', async (req, res) => {
       user: {
         id: data.user?.id,
         email: data.user?.email,
-        username: username
+        username: username,
+        full_name: fullName.trim(),
+        phone: phone
       },
       // Include session if email confirmation is disabled
       session: data.session || null
