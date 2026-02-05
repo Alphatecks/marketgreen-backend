@@ -3283,4 +3283,365 @@ router.delete('/promotions/:id', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// PRODUCT REVIEWS MANAGEMENT
+// ============================================
+
+// Get review statistics
+router.get('/reviews/stats', checkAdmin, async (req, res) => {
+  try {
+    // Get total reviews count
+    const { count: totalReviews, error: totalError } = await supabaseAdmin
+      .from('reviews')
+      .select('*', { count: 'exact', head: true })
+
+    if (totalError) {
+      console.error('Error fetching total reviews:', totalError)
+      return res.status(500).json({ error: 'Failed to fetch review statistics' })
+    }
+
+    // Get approved reviews count
+    const { count: approvedCount, error: approvedError } = await supabaseAdmin
+      .from('reviews')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'approved')
+
+    // Get pending reviews count
+    const { count: pendingCount, error: pendingError } = await supabaseAdmin
+      .from('reviews')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'pending')
+
+    // Get average rating from approved reviews
+    const { data: approvedReviews, error: avgError } = await supabaseAdmin
+      .from('reviews')
+      .select('rating')
+      .eq('status', 'approved')
+
+    if (approvedError || pendingError || avgError) {
+      console.error('Error fetching review stats:', { approvedError, pendingError, avgError })
+    }
+
+    // Calculate average rating
+    let averageRating = 0
+    if (approvedReviews && approvedReviews.length > 0) {
+      const sum = approvedReviews.reduce((acc, review) => acc + parseFloat(review.rating || 0), 0)
+      averageRating = sum / approvedReviews.length
+    }
+
+    res.json({
+      totalReviews: totalReviews || 0,
+      approved: approvedCount || 0,
+      pending: pendingCount || 0,
+      rejected: (totalReviews || 0) - (approvedCount || 0) - (pendingCount || 0),
+      averageRating: parseFloat(averageRating.toFixed(1))
+    })
+  } catch (error) {
+    console.error('Get review stats error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get all reviews with filters
+router.get('/reviews', checkAdmin, async (req, res) => {
+  try {
+    const {
+      status,
+      rating,
+      search,
+      limit = 50,
+      offset = 0,
+      sortBy = 'created_at',
+      sortOrder = 'desc'
+    } = req.query
+
+    // Build query with product information
+    let query = supabaseAdmin
+      .from('reviews')
+      .select(`
+        *,
+        products (
+          id,
+          name,
+          main_image,
+          image_url
+        )
+      `, { count: 'exact' })
+      .order(sortBy, { ascending: sortOrder === 'asc' })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filters
+    if (status && status !== 'all') {
+      query = query.eq('status', status)
+    }
+
+    if (rating && rating !== 'all') {
+      query = query.eq('rating', parseInt(rating))
+    }
+
+    if (search) {
+      query = query.or(`review_text.ilike.%${search}%,customer_name.ilike.%${search}%,customer_email.ilike.%${search}%`)
+    }
+
+    const { data, error, count } = await query
+
+    if (error) {
+      console.error('Error fetching reviews:', error)
+      return res.status(500).json({ error: error.message })
+    }
+
+    // Format reviews for frontend
+    const formattedReviews = (data || []).map(review => ({
+      id: review.id,
+      product: {
+        id: review.products?.id,
+        name: review.products?.name,
+        image: review.products?.main_image || review.products?.image_url
+      },
+      customer: {
+        name: review.customer_name,
+        email: review.customer_email
+      },
+      rating: review.rating,
+      review: review.review_text,
+      helpfulCount: review.helpful_count || 0,
+      status: review.status,
+      date: review.created_at,
+      createdAt: review.created_at,
+      updatedAt: review.updated_at
+    }))
+
+    res.json({
+      reviews: formattedReviews,
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Get reviews error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Approve a review
+router.put('/reviews/:id/approve', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid review ID format' })
+    }
+
+    // Check if review exists
+    const { data: review, error: checkError } = await supabaseAdmin
+      .from('reviews')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !review) {
+      return res.status(404).json({ error: 'Review not found' })
+    }
+
+    // Update review status to approved
+    const { data: updatedReview, error: updateError } = await supabaseAdmin
+      .from('reviews')
+      .update({
+        status: 'approved',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Error approving review:', updateError)
+      return res.status(500).json({
+        error: 'Failed to approve review',
+        details: updateError.message
+      })
+    }
+
+    res.json({
+      message: 'Review approved successfully',
+      review: updatedReview
+    })
+  } catch (error) {
+    console.error('Approve review error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Reject a review
+router.put('/reviews/:id/reject', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid review ID format' })
+    }
+
+    // Check if review exists
+    const { data: review, error: checkError } = await supabaseAdmin
+      .from('reviews')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !review) {
+      return res.status(404).json({ error: 'Review not found' })
+    }
+
+    // Update review status to rejected
+    const { data: updatedReview, error: updateError } = await supabaseAdmin
+      .from('reviews')
+      .update({
+        status: 'rejected',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Error rejecting review:', updateError)
+      return res.status(500).json({
+        error: 'Failed to reject review',
+        details: updateError.message
+      })
+    }
+
+    res.json({
+      message: 'Review rejected successfully',
+      review: updatedReview
+    })
+  } catch (error) {
+    console.error('Reject review error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete a review
+router.delete('/reviews/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid review ID format' })
+    }
+
+    // Check if review exists
+    const { data: review, error: checkError } = await supabaseAdmin
+      .from('reviews')
+      .select('id, customer_name, product_id')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !review) {
+      return res.status(404).json({ error: 'Review not found' })
+    }
+
+    // Delete review
+    const { error: deleteError } = await supabaseAdmin
+      .from('reviews')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      console.error('Error deleting review:', deleteError)
+      return res.status(500).json({
+        error: 'Failed to delete review',
+        details: deleteError.message
+      })
+    }
+
+    res.json({
+      message: 'Review deleted successfully',
+      deletedReview: {
+        id: review.id,
+        customerName: review.customer_name
+      }
+    })
+  } catch (error) {
+    console.error('Delete review error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Bulk actions for reviews
+router.post('/reviews/bulk-action', checkAdmin, async (req, res) => {
+  try {
+    const { reviewIds, action } = req.body
+
+    if (!reviewIds || !Array.isArray(reviewIds) || reviewIds.length === 0) {
+      return res.status(400).json({ error: 'Review IDs are required' })
+    }
+
+    if (!action || !['approve', 'reject', 'delete'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid action. Must be approve, reject, or delete' })
+    }
+
+    // Validate all IDs are UUIDs
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const invalidIds = reviewIds.filter(id => !uuidRegex.test(id))
+    if (invalidIds.length > 0) {
+      return res.status(400).json({ error: 'Invalid review ID format', invalidIds })
+    }
+
+    let result
+    if (action === 'delete') {
+      // Delete reviews
+      const { error: deleteError } = await supabaseAdmin
+        .from('reviews')
+        .delete()
+        .in('id', reviewIds)
+
+      if (deleteError) {
+        console.error('Error bulk deleting reviews:', deleteError)
+        return res.status(500).json({
+          error: 'Failed to delete reviews',
+          details: deleteError.message
+        })
+      }
+
+      result = { deleted: reviewIds.length }
+    } else {
+      // Approve or reject reviews
+      const status = action === 'approve' ? 'approved' : 'rejected'
+      const { error: updateError } = await supabaseAdmin
+        .from('reviews')
+        .update({
+          status: status,
+          updated_at: new Date().toISOString()
+        })
+        .in('id', reviewIds)
+
+      if (updateError) {
+        console.error(`Error bulk ${action}ing reviews:`, updateError)
+        return res.status(500).json({
+          error: `Failed to ${action} reviews`,
+          details: updateError.message
+        })
+      }
+
+      result = { [action === 'approve' ? 'approved' : 'rejected']: reviewIds.length }
+    }
+
+    res.json({
+      message: `Successfully ${action === 'delete' ? 'deleted' : action + 'd'} ${reviewIds.length} review(s)`,
+      ...result
+    })
+  } catch (error) {
+    console.error('Bulk action error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
