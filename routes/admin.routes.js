@@ -809,16 +809,22 @@ router.get('/transactions', checkAdmin, async (req, res) => {
 // CATEGORIES MANAGEMENT
 // ============================================
 
-// Get all categories with product counts
+// Get all categories with product counts (for Discover section)
 router.get('/categories', checkAdmin, async (req, res) => {
   try {
-    const { limit = 10, offset = 0 } = req.query
+    const { limit = 20, offset = 0 } = req.query
 
-    // Get all unique categories with product counts
+    // Get all unique categories from product_categories table (junction table)
     const { data: categoriesData, error: categoriesError } = await supabaseAdmin
-      .from('products')
+      .from('product_categories')
       .select('category')
       .order('category', { ascending: true })
+
+    // Also get from legacy category field for backward compatibility
+    const { data: legacyCategoriesData } = await supabaseAdmin
+      .from('products')
+      .select('category')
+      .not('category', 'is', null)
 
     if (categoriesError) {
       return res.status(500).json({ error: categoriesError.message })
@@ -826,7 +832,22 @@ router.get('/categories', checkAdmin, async (req, res) => {
 
     // Group by category and count products
     const categoryMap = {}
-    categoriesData.forEach(product => {
+    
+    // Count from product_categories junction table
+    categoriesData?.forEach(pc => {
+      if (pc.category) {
+        if (!categoryMap[pc.category]) {
+          categoryMap[pc.category] = {
+            name: pc.category,
+            count: 0
+          }
+        }
+        categoryMap[pc.category].count++
+      }
+    })
+
+    // Also count from legacy category field
+    legacyCategoriesData?.forEach(product => {
       if (product.category) {
         if (!categoryMap[product.category]) {
           categoryMap[product.category] = {
@@ -835,6 +856,33 @@ router.get('/categories', checkAdmin, async (req, res) => {
           }
         }
         categoryMap[product.category].count++
+      }
+    })
+
+    // Get unique product counts per category (avoid double counting)
+    const { data: uniqueCounts } = await supabaseAdmin
+      .from('product_categories')
+      .select('category, product_id')
+    
+    const uniqueCategoryMap = {}
+    uniqueCounts?.forEach(pc => {
+      if (pc.category) {
+        if (!uniqueCategoryMap[pc.category]) {
+          uniqueCategoryMap[pc.category] = new Set()
+        }
+        uniqueCategoryMap[pc.category].add(pc.product_id)
+      }
+    })
+
+    // Update counts with unique product counts
+    Object.keys(uniqueCategoryMap).forEach(category => {
+      if (categoryMap[category]) {
+        categoryMap[category].count = uniqueCategoryMap[category].size
+      } else {
+        categoryMap[category] = {
+          name: category,
+          count: uniqueCategoryMap[category].size
+        }
       }
     })
 
@@ -854,6 +902,44 @@ router.get('/categories', checkAdmin, async (req, res) => {
     })
   } catch (error) {
     console.error('Categories error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get product counts by filter type (for filter tabs)
+router.get('/products/counts', checkAdmin, async (req, res) => {
+  try {
+    // Get all products count
+    const { count: allCount } = await supabaseAdmin
+      .from('products')
+      .select('*', { count: 'exact', head: true })
+
+    // Get featured products count
+    const { count: featuredCount } = await supabaseAdmin
+      .from('products')
+      .select('*', { count: 'exact', head: true })
+      .eq('featured', true)
+
+    // Get on sale products count (badge='sale' or discount_percentage > 0)
+    const { count: onSaleCount } = await supabaseAdmin
+      .from('products')
+      .select('*', { count: 'exact', head: true })
+      .or('badge.eq.sale,discount_percentage.gt.0')
+
+    // Get out of stock products count
+    const { count: outOfStockCount } = await supabaseAdmin
+      .from('products')
+      .select('*', { count: 'exact', head: true })
+      .or('stock_status.eq.Out of Stock,stock.eq.0')
+
+    res.json({
+      all: allCount || 0,
+      featured: featuredCount || 0,
+      onSale: onSaleCount || 0,
+      outOfStock: outOfStockCount || 0
+    })
+  } catch (error) {
+    console.error('Product counts error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -908,6 +994,7 @@ router.get('/products', checkAdmin, async (req, res) => {
       productStatus,
       badge,
       search,
+      filter, // 'all', 'featured', 'onSale', 'outOfStock'
       limit = 50, 
       offset = 0,
       sortBy = 'created_at',
@@ -919,6 +1006,18 @@ router.get('/products', checkAdmin, async (req, res) => {
       .select('*', { count: 'exact' })
       .order(sortBy, { ascending: sortOrder === 'asc' })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filter tabs (All Product, Featured Products, On Sale, Out of Stock)
+    if (filter === 'featured') {
+      query = query.eq('featured', true)
+    } else if (filter === 'onSale') {
+      // Products with discount (badge='sale' or has discount_percentage > 0)
+      query = query.or('badge.eq.sale,discount_percentage.gt.0')
+    } else if (filter === 'outOfStock') {
+      // Products that are out of stock
+      query = query.or('stock_status.eq.Out of Stock,stock.eq.0')
+    }
+    // 'all' or no filter = show all products
 
     // Apply filters
     if (category) {
@@ -953,15 +1052,46 @@ router.get('/products', checkAdmin, async (req, res) => {
       return res.status(500).json({ error: error.message })
     }
 
-    // Normalize image fields to ensure main_image and image_url are synchronized
-    const normalizedProducts = normalizeProductsImages(data || [])
+    // Get order counts for each product
+    const productIds = (data || []).map(p => p.id)
+    let orderCounts = {}
+    
+    if (productIds.length > 0) {
+      // Get all orders and count products in order items
+      const { data: allOrders } = await supabaseAdmin
+        .from('orders')
+        .select('items')
+        .in('status', ['pending', 'processing', 'confirmed', 'shipped', 'delivered'])
+
+      allOrders?.forEach(order => {
+        if (order.items && Array.isArray(order.items)) {
+          order.items.forEach(item => {
+            const productId = item.product_id || item.id || item.productId
+            if (productId && productIds.includes(productId)) {
+              orderCounts[productId] = (orderCounts[productId] || 0) + (parseInt(item.quantity) || 1)
+            }
+          })
+        }
+      })
+    }
+
+    // Normalize image fields and add order counts
+    const normalizedProducts = (data || []).map((product, index) => {
+      const normalized = normalizeProductImages(product)
+      return {
+        ...normalized,
+        orderCount: orderCounts[product.id] || 0,
+        rowNumber: parseInt(offset) + index + 1
+      }
+    })
 
     res.json({
       products: normalizedProducts,
       total: count || 0,
       limit: parseInt(limit),
       offset: parseInt(offset),
-      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit),
+      filter: filter || 'all'
     })
   } catch (error) {
     console.error('Admin products error:', error)
@@ -2437,6 +2567,158 @@ router.delete('/customers/:id', checkAdmin, async (req, res) => {
 // ============================================
 // COUPONS MANAGEMENT
 // ============================================
+
+// Get all coupons (admin view)
+router.get('/coupons', checkAdmin, async (req, res) => {
+  try {
+    const {
+      limit = 50,
+      offset = 0,
+      search,
+      isActive,
+      sortBy = 'created_at',
+      sortOrder = 'desc'
+    } = req.query
+
+    let query = supabaseAdmin
+      .from('coupons')
+      .select('*', { count: 'exact' })
+      .order(sortBy, { ascending: sortOrder === 'asc' })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filters
+    if (isActive !== undefined) {
+      query = query.eq('is_active', isActive === 'true')
+    }
+
+    if (search) {
+      query = query.or(`code.ilike.%${search}%,description.ilike.%${search}%`)
+    }
+
+    const { data: coupons, error, count } = await query
+
+    if (error) {
+      return res.status(500).json({
+        error: 'Error fetching coupons',
+        details: error.message
+      })
+    }
+
+    // Format response
+    const formattedCoupons = (coupons || []).map(coupon => ({
+      id: coupon.id,
+      code: coupon.code,
+      description: coupon.description,
+      discountType: coupon.discount_type,
+      discountValue: parseFloat(coupon.discount_value),
+      minOrderAmount: parseFloat(coupon.min_order_amount),
+      maxDiscountAmount: coupon.max_discount_amount ? parseFloat(coupon.max_discount_amount) : null,
+      usageLimit: coupon.usage_limit,
+      usageCount: coupon.usage_count,
+      userLimit: coupon.user_limit,
+      validFrom: coupon.valid_from,
+      validUntil: coupon.valid_until,
+      isActive: coupon.is_active,
+      createdBy: coupon.created_by,
+      createdAt: coupon.created_at,
+      updatedAt: coupon.updated_at,
+      // Calculate status
+      status: (() => {
+        if (!coupon.is_active) return 'inactive'
+        const now = new Date()
+        const validFrom = new Date(coupon.valid_from)
+        const validUntil = coupon.valid_until ? new Date(coupon.valid_until) : null
+        
+        if (now < validFrom) return 'upcoming'
+        if (validUntil && now > validUntil) return 'expired'
+        if (coupon.usage_limit && coupon.usage_count >= coupon.usage_limit) return 'limit_reached'
+        return 'active'
+      })()
+    }))
+
+    res.json({
+      coupons: formattedCoupons,
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Get coupons error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get single coupon by ID
+router.get('/coupons/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid coupon ID format' })
+    }
+
+    const { data: coupon, error } = await supabaseAdmin
+      .from('coupons')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116' || error.message?.includes('No rows')) {
+        return res.status(404).json({ error: 'Coupon not found' })
+      }
+      return res.status(500).json({
+        error: 'Error fetching coupon',
+        details: error.message
+      })
+    }
+
+    // Get usage statistics
+    const { count: totalUsageCount } = await supabaseAdmin
+      .from('coupon_usage')
+      .select('*', { count: 'exact', head: true })
+      .eq('coupon_id', id)
+
+    // Format response
+    const now = new Date()
+    const validFrom = new Date(coupon.valid_from)
+    const validUntil = coupon.valid_until ? new Date(coupon.valid_until) : null
+
+    res.json({
+      id: coupon.id,
+      code: coupon.code,
+      description: coupon.description,
+      discountType: coupon.discount_type,
+      discountValue: parseFloat(coupon.discount_value),
+      minOrderAmount: parseFloat(coupon.min_order_amount),
+      maxDiscountAmount: coupon.max_discount_amount ? parseFloat(coupon.max_discount_amount) : null,
+      usageLimit: coupon.usage_limit,
+      usageCount: coupon.usage_count,
+      totalUsageCount: totalUsageCount || 0,
+      userLimit: coupon.user_limit,
+      validFrom: coupon.valid_from,
+      validUntil: coupon.valid_until,
+      isActive: coupon.is_active,
+      createdBy: coupon.created_by,
+      createdAt: coupon.created_at,
+      updatedAt: coupon.updated_at,
+      status: (() => {
+        if (!coupon.is_active) return 'inactive'
+        if (now < validFrom) return 'upcoming'
+        if (validUntil && now > validUntil) return 'expired'
+        if (coupon.usage_limit && coupon.usage_count >= coupon.usage_limit) return 'limit_reached'
+        return 'active'
+      })(),
+      remainingUsage: coupon.usage_limit ? coupon.usage_limit - coupon.usage_count : null
+    })
+  } catch (error) {
+    console.error('Get coupon error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
 
 // Create a new coupon
 router.post('/coupons', checkAdmin, async (req, res) => {
