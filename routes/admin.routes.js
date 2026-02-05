@@ -453,8 +453,8 @@ router.get('/dashboard/stats', checkAdmin, async (req, res) => {
     // ============================================
     // TOTAL SALES METRICS
     // ============================================
-    // Last period sales (completed orders only)
-    const { data: lastPeriodSales, error: lastPeriodSalesError } = await supabase
+    // Last period sales (completed orders only) - use admin client to bypass RLS
+    const { data: lastPeriodSales, error: lastPeriodSalesError } = await supabaseAdmin
       .from('orders')
       .select('total_amount')
       .in('status', ['confirmed', 'shipped', 'delivered'])
@@ -462,7 +462,7 @@ router.get('/dashboard/stats', checkAdmin, async (req, res) => {
       .lte('created_at', endDate.toISOString())
 
     // Previous period sales
-    const { data: previousPeriodSales, error: previousPeriodSalesError } = await supabase
+    const { data: previousPeriodSales, error: previousPeriodSalesError } = await supabaseAdmin
       .from('orders')
       .select('total_amount')
       .in('status', ['confirmed', 'shipped', 'delivered'])
@@ -483,15 +483,15 @@ router.get('/dashboard/stats', checkAdmin, async (req, res) => {
     // ============================================
     // TOTAL ORDERS METRICS
     // ============================================
-    // Last period orders count
-    const { count: lastPeriodOrdersCount, error: lastPeriodOrdersError } = await supabase
+    // Last period orders count - use admin client to bypass RLS
+    const { count: lastPeriodOrdersCount, error: lastPeriodOrdersError } = await supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact', head: true })
       .gte('created_at', startDate.toISOString())
       .lte('created_at', endDate.toISOString())
 
     // Previous period orders count
-    const { count: previousPeriodOrdersCount, error: previousPeriodOrdersError } = await supabase
+    const { count: previousPeriodOrdersCount, error: previousPeriodOrdersError } = await supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact', head: true })
       .gte('created_at', previousStartDate.toISOString())
@@ -509,8 +509,8 @@ router.get('/dashboard/stats', checkAdmin, async (req, res) => {
     // ============================================
     // PENDING & CANCELED METRICS
     // ============================================
-    // Get pending orders count
-    const { count: pendingCount, error: pendingError } = await supabase
+    // Get pending orders count - use admin client to bypass RLS
+    const { count: pendingCount, error: pendingError } = await supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending')
@@ -518,7 +518,7 @@ router.get('/dashboard/stats', checkAdmin, async (req, res) => {
       .lte('created_at', endDate.toISOString())
 
     // Get canceled orders count
-    const { count: canceledCount, error: canceledError } = await supabase
+    const { count: canceledCount, error: canceledError } = await supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'canceled')
@@ -532,15 +532,15 @@ router.get('/dashboard/stats', checkAdmin, async (req, res) => {
       })
     }
 
-    // Get previous period pending & canceled for change calculation
-    const { count: previousPendingCount, error: prevPendingError } = await supabase
+    // Get previous period pending & canceled for change calculation - use admin client
+    const { count: previousPendingCount, error: prevPendingError } = await supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact', head: true })
       .in('status', ['pending', 'canceled'])
       .gte('created_at', previousStartDate.toISOString())
       .lt('created_at', startDate.toISOString())
 
-    const { count: previousCanceledCount } = await supabase
+    const { count: previousCanceledCount } = await supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'canceled')
@@ -601,7 +601,8 @@ router.get('/dashboard/orders', checkAdmin, async (req, res) => {
   try {
     const { status, limit = 50, offset = 0 } = req.query
 
-    let query = supabase
+    // Use admin client to bypass RLS and get all orders
+    let query = supabaseAdmin
       .from('orders')
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
@@ -614,16 +615,18 @@ router.get('/dashboard/orders', checkAdmin, async (req, res) => {
     const { data, error, count } = await query
 
     if (error) {
+      console.error('Error fetching admin orders:', error)
       return res.status(500).json({ error: error.message })
     }
 
     res.json({
-      orders: data,
-      total: count,
+      orders: data || [],
+      total: count || 0,
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
   } catch (error) {
+    console.error('Get admin orders error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -637,7 +640,8 @@ router.get('/dashboard/sales-breakdown', checkAdmin, async (req, res) => {
       return res.status(400).json({ error: 'startDate and endDate query parameters are required' })
     }
 
-    const { data, error } = await supabase
+    // Use admin client to bypass RLS and get all orders
+    const { data, error } = await supabaseAdmin
       .from('orders')
       .select('total_amount, status, created_at')
       .gte('created_at', startDate)
@@ -698,8 +702,8 @@ router.get('/transactions', checkAdmin, async (req, res) => {
       endDate
     } = req.query
 
-    // Build query
-    let query = supabase
+    // Build query using admin client to bypass RLS
+    let query = supabaseAdmin
       .from('orders')
       .select(`
         id,
