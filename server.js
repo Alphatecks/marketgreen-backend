@@ -12,6 +12,7 @@ import userRoutes from './routes/user.routes.js'
 import orderRoutes from './routes/order.routes.js'
 import adminRoutes from './routes/admin.routes.js'
 import paymentRoutes from './routes/payment.routes.js'
+import couponRoutes from './routes/coupon.routes.js'
 
 // Load environment variables
 dotenv.config()
@@ -99,6 +100,7 @@ app.use('/api/users', userRoutes)
 app.use('/api/orders', orderRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/payments', paymentRoutes)
+app.use('/api/coupons', couponRoutes)
 
 // 404 handler
 app.use((req, res) => {

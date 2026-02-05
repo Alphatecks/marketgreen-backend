@@ -2434,4 +2434,148 @@ router.delete('/customers/:id', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// COUPONS MANAGEMENT
+// ============================================
+
+// Create a new coupon
+router.post('/coupons', checkAdmin, async (req, res) => {
+  try {
+    const {
+      code,
+      description,
+      discountType, // 'percentage' or 'fixed'
+      discountValue,
+      minOrderAmount = 0,
+      maxDiscountAmount,
+      usageLimit, // Total usage limit (null = unlimited)
+      userLimit = 1, // Per-user usage limit
+      validFrom,
+      validUntil,
+      isActive = true
+    } = req.body
+
+    // Validate required fields
+    if (!code || !discountType || discountValue === undefined) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['code', 'discountType', 'discountValue']
+      })
+    }
+
+    // Validate discount type
+    if (!['percentage', 'fixed'].includes(discountType)) {
+      return res.status(400).json({
+        error: 'Invalid discountType',
+        message: 'discountType must be either "percentage" or "fixed"'
+      })
+    }
+
+    // Validate discount value
+    if (discountType === 'percentage') {
+      if (discountValue < 0 || discountValue > 100) {
+        return res.status(400).json({
+          error: 'Invalid discountValue',
+          message: 'Percentage discount must be between 0 and 100'
+        })
+      }
+    } else {
+      if (discountValue < 0) {
+        return res.status(400).json({
+          error: 'Invalid discountValue',
+          message: 'Fixed discount must be greater than or equal to 0'
+        })
+      }
+    }
+
+    // Validate dates
+    let validFromDate = validFrom ? new Date(validFrom) : new Date()
+    let validUntilDate = validUntil ? new Date(validUntil) : null
+
+    if (validUntilDate && validUntilDate <= validFromDate) {
+      return res.status(400).json({
+        error: 'Invalid date range',
+        message: 'validUntil must be after validFrom'
+      })
+    }
+
+    // Check if coupon code already exists
+    const { data: existingCoupon, error: checkError } = await supabaseAdmin
+      .from('coupons')
+      .select('id, code')
+      .eq('code', code.toUpperCase().trim())
+      .single()
+
+    if (checkError && checkError.code !== 'PGRST116') {
+      return res.status(500).json({
+        error: 'Error checking coupon code',
+        details: checkError.message
+      })
+    }
+
+    if (existingCoupon) {
+      return res.status(409).json({
+        error: 'Coupon code already exists',
+        message: `A coupon with code "${code}" already exists`
+      })
+    }
+
+    // Create coupon
+    const couponData = {
+      code: code.toUpperCase().trim(),
+      description: description || null,
+      discount_type: discountType,
+      discount_value: parseFloat(discountValue),
+      min_order_amount: parseFloat(minOrderAmount || 0),
+      max_discount_amount: maxDiscountAmount ? parseFloat(maxDiscountAmount) : null,
+      usage_limit: usageLimit ? parseInt(usageLimit) : null,
+      user_limit: parseInt(userLimit || 1),
+      valid_from: validFromDate.toISOString(),
+      valid_until: validUntilDate ? validUntilDate.toISOString() : null,
+      is_active: Boolean(isActive),
+      created_by: req.user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+
+    const { data: coupon, error: createError } = await supabaseAdmin
+      .from('coupons')
+      .insert([couponData])
+      .select()
+      .single()
+
+    if (createError) {
+      console.error('Coupon creation error:', createError)
+      return res.status(500).json({
+        error: 'Failed to create coupon',
+        details: createError.message
+      })
+    }
+
+    res.status(201).json({
+      message: 'Coupon created successfully',
+      coupon: {
+        id: coupon.id,
+        code: coupon.code,
+        description: coupon.description,
+        discountType: coupon.discount_type,
+        discountValue: parseFloat(coupon.discount_value),
+        minOrderAmount: parseFloat(coupon.min_order_amount),
+        maxDiscountAmount: coupon.max_discount_amount ? parseFloat(coupon.max_discount_amount) : null,
+        usageLimit: coupon.usage_limit,
+        usageCount: coupon.usage_count,
+        userLimit: coupon.user_limit,
+        validFrom: coupon.valid_from,
+        validUntil: coupon.valid_until,
+        isActive: coupon.is_active,
+        createdAt: coupon.created_at,
+        updatedAt: coupon.updated_at
+      }
+    })
+  } catch (error) {
+    console.error('Create coupon error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
