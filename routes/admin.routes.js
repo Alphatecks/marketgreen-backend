@@ -2860,4 +2860,373 @@ router.post('/coupons', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// PROMOTIONS MANAGEMENT
+// ============================================
+
+// Get all promotions (admin view)
+router.get('/promotions', checkAdmin, async (req, res) => {
+  try {
+    const {
+      limit = 50,
+      offset = 0,
+      isActive,
+      sortBy = 'display_order',
+      sortOrder = 'asc'
+    } = req.query
+
+    let query = supabaseAdmin
+      .from('promotions')
+      .select('*', { count: 'exact' })
+      .order(sortBy, { ascending: sortOrder === 'asc' })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply filters
+    if (isActive !== undefined) {
+      query = query.eq('is_active', isActive === 'true')
+    }
+
+    const { data: promotions, error, count } = await query
+
+    if (error) {
+      return res.status(500).json({
+        error: 'Error fetching promotions',
+        details: error.message
+      })
+    }
+
+    // Format response
+    const formattedPromotions = (promotions || []).map(promotion => ({
+      id: promotion.id,
+      headerText: promotion.header_text,
+      subtitle: promotion.subtitle,
+      mainTitle: promotion.main_title,
+      countdownEndDate: promotion.countdown_end_date,
+      buttonText: promotion.button_text,
+      buttonLink: promotion.button_link,
+      productImage: promotion.product_image,
+      backgroundImage: promotion.background_image,
+      backgroundColor: promotion.background_color,
+      isActive: promotion.is_active,
+      displayOrder: promotion.display_order,
+      createdBy: promotion.created_by,
+      createdAt: promotion.created_at,
+      updatedAt: promotion.updated_at
+    }))
+
+    res.json({
+      promotions: formattedPromotions,
+      total: count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count || 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Get promotions error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get single promotion by ID
+router.get('/promotions/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid promotion ID format' })
+    }
+
+    const { data: promotion, error } = await supabaseAdmin
+      .from('promotions')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116' || error.message?.includes('No rows')) {
+        return res.status(404).json({ error: 'Promotion not found' })
+      }
+      return res.status(500).json({
+        error: 'Error fetching promotion',
+        details: error.message
+      })
+    }
+
+    res.json({
+      id: promotion.id,
+      headerText: promotion.header_text,
+      subtitle: promotion.subtitle,
+      mainTitle: promotion.main_title,
+      countdownEndDate: promotion.countdown_end_date,
+      buttonText: promotion.button_text,
+      buttonLink: promotion.button_link,
+      productImage: promotion.product_image,
+      backgroundImage: promotion.background_image,
+      backgroundColor: promotion.background_color,
+      isActive: promotion.is_active,
+      displayOrder: promotion.display_order,
+      createdBy: promotion.created_by,
+      createdAt: promotion.created_at,
+      updatedAt: promotion.updated_at
+    })
+  } catch (error) {
+    console.error('Get promotion error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Create a new promotion
+router.post('/promotions', checkAdmin, async (req, res) => {
+  try {
+    const {
+      headerText,
+      subtitle,
+      mainTitle,
+      countdownEndDate,
+      buttonText = 'SHOP NOW',
+      buttonLink = '/products',
+      productImage,
+      backgroundImage,
+      backgroundColor = '#FEF3C7',
+      isActive = true,
+      displayOrder = 0
+    } = req.body
+
+    // Validate required fields
+    if (!mainTitle) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['mainTitle']
+      })
+    }
+
+    // Validate countdown date if provided
+    let countdownDate = null
+    if (countdownEndDate) {
+      countdownDate = new Date(countdownEndDate)
+      if (isNaN(countdownDate.getTime())) {
+        return res.status(400).json({
+          error: 'Invalid countdown end date format',
+          message: 'Please provide a valid date in ISO format'
+        })
+      }
+    }
+
+    // Validate background color format (hex)
+    if (backgroundColor && !/^#[0-9A-F]{6}$/i.test(backgroundColor)) {
+      return res.status(400).json({
+        error: 'Invalid background color format',
+        message: 'Background color must be a valid hex color code (e.g., #FEF3C7)'
+      })
+    }
+
+    // Create promotion
+    const promotionData = {
+      header_text: headerText || null,
+      subtitle: subtitle || null,
+      main_title: mainTitle.trim(),
+      countdown_end_date: countdownDate ? countdownDate.toISOString() : null,
+      button_text: buttonText || 'SHOP NOW',
+      button_link: buttonLink || '/products',
+      product_image: productImage || null,
+      background_image: backgroundImage || null,
+      background_color: backgroundColor || '#FEF3C7',
+      is_active: Boolean(isActive),
+      display_order: parseInt(displayOrder || 0),
+      created_by: req.user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+
+    const { data: promotion, error: createError } = await supabaseAdmin
+      .from('promotions')
+      .insert([promotionData])
+      .select()
+      .single()
+
+    if (createError) {
+      console.error('Promotion creation error:', createError)
+      return res.status(500).json({
+        error: 'Failed to create promotion',
+        details: createError.message
+      })
+    }
+
+    res.status(201).json({
+      message: 'Promotion created successfully',
+      promotion: {
+        id: promotion.id,
+        headerText: promotion.header_text,
+        subtitle: promotion.subtitle,
+        mainTitle: promotion.main_title,
+        countdownEndDate: promotion.countdown_end_date,
+        buttonText: promotion.button_text,
+        buttonLink: promotion.button_link,
+        productImage: promotion.product_image,
+        backgroundImage: promotion.background_image,
+        backgroundColor: promotion.background_color,
+        isActive: promotion.is_active,
+        displayOrder: promotion.display_order,
+        createdAt: promotion.created_at,
+        updatedAt: promotion.updated_at
+      }
+    })
+  } catch (error) {
+    console.error('Create promotion error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Update a promotion
+router.put('/promotions/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+    const updates = req.body
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid promotion ID format' })
+    }
+
+    // Check if promotion exists
+    const { data: existingPromotion, error: checkError } = await supabaseAdmin
+      .from('promotions')
+      .select('id')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !existingPromotion) {
+      return res.status(404).json({ error: 'Promotion not found' })
+    }
+
+    // Prepare update data
+    const updateData = {}
+    
+    if (updates.headerText !== undefined) updateData.header_text = updates.headerText
+    if (updates.subtitle !== undefined) updateData.subtitle = updates.subtitle
+    if (updates.mainTitle !== undefined) updateData.main_title = updates.mainTitle?.trim()
+    if (updates.countdownEndDate !== undefined) {
+      if (updates.countdownEndDate) {
+        const countdownDate = new Date(updates.countdownEndDate)
+        if (isNaN(countdownDate.getTime())) {
+          return res.status(400).json({
+            error: 'Invalid countdown end date format'
+          })
+        }
+        updateData.countdown_end_date = countdownDate.toISOString()
+      } else {
+        updateData.countdown_end_date = null
+      }
+    }
+    if (updates.buttonText !== undefined) updateData.button_text = updates.buttonText
+    if (updates.buttonLink !== undefined) updateData.button_link = updates.buttonLink
+    if (updates.productImage !== undefined) updateData.product_image = updates.productImage
+    if (updates.backgroundImage !== undefined) updateData.background_image = updates.backgroundImage
+    if (updates.backgroundColor !== undefined) {
+      if (!/^#[0-9A-F]{6}$/i.test(updates.backgroundColor)) {
+        return res.status(400).json({
+          error: 'Invalid background color format'
+        })
+      }
+      updateData.background_color = updates.backgroundColor
+    }
+    if (updates.isActive !== undefined) updateData.is_active = Boolean(updates.isActive)
+    if (updates.displayOrder !== undefined) updateData.display_order = parseInt(updates.displayOrder)
+
+    // Add updated_at timestamp
+    updateData.updated_at = new Date().toISOString()
+
+    // Update promotion
+    const { data: promotion, error: updateError } = await supabaseAdmin
+      .from('promotions')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Promotion update error:', updateError)
+      return res.status(500).json({
+        error: 'Failed to update promotion',
+        details: updateError.message
+      })
+    }
+
+    res.json({
+      message: 'Promotion updated successfully',
+      promotion: {
+        id: promotion.id,
+        headerText: promotion.header_text,
+        subtitle: promotion.subtitle,
+        mainTitle: promotion.main_title,
+        countdownEndDate: promotion.countdown_end_date,
+        buttonText: promotion.button_text,
+        buttonLink: promotion.button_link,
+        productImage: promotion.product_image,
+        backgroundImage: promotion.background_image,
+        backgroundColor: promotion.background_color,
+        isActive: promotion.is_active,
+        displayOrder: promotion.display_order,
+        createdAt: promotion.created_at,
+        updatedAt: promotion.updated_at
+      }
+    })
+  } catch (error) {
+    console.error('Update promotion error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete a promotion
+router.delete('/promotions/:id', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid promotion ID format' })
+    }
+
+    // Check if promotion exists
+    const { data: promotion, error: checkError } = await supabaseAdmin
+      .from('promotions')
+      .select('id, main_title')
+      .eq('id', id)
+      .single()
+
+    if (checkError || !promotion) {
+      return res.status(404).json({ error: 'Promotion not found' })
+    }
+
+    // Delete promotion
+    const { error: deleteError } = await supabaseAdmin
+      .from('promotions')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      console.error('Promotion deletion error:', deleteError)
+      return res.status(500).json({
+        error: 'Failed to delete promotion',
+        details: deleteError.message
+      })
+    }
+
+    res.json({
+      message: 'Promotion deleted successfully',
+      deletedPromotion: {
+        id: promotion.id,
+        mainTitle: promotion.main_title
+      }
+    })
+  } catch (error) {
+    console.error('Delete promotion error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
