@@ -5,6 +5,7 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
 ## 🚀 Features
 
 - User authentication (register, login, logout)
+- Welcome email notifications for new users
 - Product management (CRUD operations)
 - User profile management
 - Order management
@@ -40,7 +41,14 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
    SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
    FRONTEND_URL=http://localhost:5173
    PORT=3000
+   
+   # Gmail Configuration (for welcome emails)
+   GMAIL_USER=your-company-email@gmail.com
+   GMAIL_APP_PASSWORD=your-gmail-app-password
+   COMPANY_NAME=MarketGreen
    ```
+   
+   **Note:** For Gmail, you need to use an [App Password](https://support.google.com/accounts/answer/185833) instead of your regular password. See the [Email Configuration](#-email-configuration) section below for detailed setup instructions.
 
 3. **Run the development server:**
    ```bash
@@ -48,6 +56,39 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
    ```
 
    The API will be available at `http://localhost:3000`
+
+## 📧 Email Configuration
+
+The application sends welcome emails to newly registered users using Gmail. To set this up:
+
+### Gmail App Password Setup
+
+1. **Enable 2-Step Verification** on your Google Account:
+   - Go to [Google Account Security](https://myaccount.google.com/security)
+   - Enable 2-Step Verification if not already enabled
+
+2. **Generate an App Password**:
+   - Go to [App Passwords](https://myaccount.google.com/apppasswords)
+   - Select "Mail" as the app and "Other (Custom name)" as the device
+   - Enter "MarketGreen Backend" as the custom name
+   - Click "Generate"
+   - Copy the 16-character password (spaces will be ignored)
+
+3. **Add to Environment Variables**:
+   ```env
+   GMAIL_USER=your-company-email@gmail.com
+   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+   COMPANY_NAME=MarketGreen
+   ```
+
+4. **Test the Configuration**:
+   The email service will automatically attempt to send welcome emails when users register. Check your server logs to verify emails are being sent successfully.
+
+**Important Notes:**
+- Use the App Password (not your regular Gmail password)
+- The App Password is a 16-character code (you can ignore spaces)
+- If email sending fails, the user registration will still succeed (emails are sent asynchronously)
+- Welcome emails are sent automatically when a new user signs up via `/api/auth/signup`
 
 ## 📡 API Endpoints
 
@@ -142,6 +183,9 @@ CREATE TABLE orders (
    - `SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `FRONTEND_URL` (your frontend URL)
+   - `GMAIL_USER` (your company Gmail address)
+   - `GMAIL_APP_PASSWORD` (Gmail App Password - see Email Configuration section)
+   - `COMPANY_NAME` (optional, defaults to "MarketGreen")
    - `NODE_ENV=production`
    - `PORT=3000` (Render sets this automatically)
 

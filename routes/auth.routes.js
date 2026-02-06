@@ -1,6 +1,7 @@
 import express from 'express'
 import { supabase } from '../config/supabase.js'
 import { validatePassword, validateEmail, validateUsername, validateFullName, validatePhone } from '../utils/validation.js'
+import { sendWelcomeEmail } from '../utils/emailService.js'
 
 const router = express.Router()
 
@@ -145,6 +146,20 @@ router.post('/signup', async (req, res) => {
         fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:81',message:'Signup - profile created successfully',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
         // #endregion
       }
+
+      // Send welcome email (non-blocking - don't fail signup if email fails)
+      sendWelcomeEmail(email, fullName.trim() || username)
+        .then(result => {
+          if (result.success) {
+            console.log('Welcome email sent successfully to:', email)
+          } else {
+            console.warn('Welcome email failed to send:', result.error)
+          }
+        })
+        .catch(error => {
+          console.error('Error sending welcome email:', error)
+          // Email failure should not affect signup success
+        })
     }
 
     // #region agent log
