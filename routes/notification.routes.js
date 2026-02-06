@@ -115,7 +115,9 @@ router.get('/', async (req, res) => {
       id: notification.id,
       sender: notification.sender,
       category: notification.category,
-      subject: notification.subject,
+      title: notification.subject, // Map subject to title for UI
+      subtitle: notification.subtitle || null, // Include subtitle
+      subject: notification.subject, // Keep for backward compatibility
       message: notification.message,
       preview: notification.preview || notification.message.substring(0, 100) + (notification.message.length > 100 ? '...' : ''),
       icon: notification.icon || 'envelope',

@@ -3809,15 +3809,108 @@ router.delete('/orders/:id', checkAdmin, async (req, res) => {
 // NOTIFICATIONS MANAGEMENT
 // ============================================
 
-// Send notification to a specific user
+// Search users for messaging (admin)
+router.get('/notifications/users', checkAdmin, async (req, res) => {
+  try {
+    const { search = '', limit = 50, offset = 0 } = req.query
+
+    let query = supabaseAdmin
+      .from('profiles')
+      .select(`
+        id,
+        username,
+        email,
+        full_name,
+        avatar_url,
+        created_at
+      `)
+      .order('created_at', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    // Apply search filter if provided
+    if (search && search.trim()) {
+      const searchTerm = search.trim()
+      query = query.or(`email.ilike.%${searchTerm}%,username.ilike.%${searchTerm}%,full_name.ilike.%${searchTerm}%`)
+    }
+
+    const { data: users, error: usersError, count } = await query
+
+    if (usersError) {
+      console.error('Error searching users:', usersError)
+      return res.status(500).json({
+        error: 'Failed to search users',
+        details: usersError.message
+      })
+    }
+
+    // Format users for UI
+    const formattedUsers = (users || []).map(user => ({
+      id: user.id,
+      name: user.full_name || user.username || 'N/A',
+      email: user.email || '',
+      avatar: user.avatar_url || null,
+      username: user.username || null
+    }))
+
+    res.json({
+      users: formattedUsers,
+      count: formattedUsers.length,
+      total: count || formattedUsers.length
+    })
+  } catch (error) {
+    console.error('Search users error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get user details for messaging (admin)
+router.get('/notifications/users/:userId', checkAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params
+
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('profiles')
+      .select(`
+        id,
+        username,
+        email,
+        full_name,
+        avatar_url,
+        phone,
+        created_at
+      `)
+      .eq('id', userId)
+      .single()
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+
+    res.json({
+      id: user.id,
+      name: user.full_name || user.username || 'N/A',
+      email: user.email || '',
+      avatar: user.avatar_url || null,
+      username: user.username || null,
+      phone: user.phone || null,
+      createdAt: user.created_at
+    })
+  } catch (error) {
+    console.error('Get user error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Send notification to a specific user (refactored for UI)
 router.post('/notifications', checkAdmin, async (req, res) => {
   try {
     const {
       userId,
+      title, // Message title (maps to subject)
+      subtitle, // Message subtitle (optional)
+      message, // Message body
       sender = 'MarketGreen Team',
       category = 'system',
-      subject,
-      message,
       icon = 'envelope',
       isImportant = false
     } = req.body
@@ -3827,14 +3920,17 @@ router.post('/notifications', checkAdmin, async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' })
     }
 
-    if (!subject || !message) {
-      return res.status(400).json({ error: 'Subject and message are required' })
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Message is required' })
     }
+
+    // Use title as subject, or generate from message if not provided
+    const subject = title?.trim() || message.substring(0, 50) + (message.length > 50 ? '...' : '')
 
     // Validate user exists
     const { data: user, error: userError } = await supabaseAdmin
       .from('profiles')
-      .select('id')
+      .select('id, email, full_name, username')
       .eq('id', userId)
       .single()
 
@@ -3842,8 +3938,9 @@ router.post('/notifications', checkAdmin, async (req, res) => {
       return res.status(404).json({ error: 'User not found' })
     }
 
-    // Generate preview (first 100 characters)
-    const preview = message.length > 100 ? message.substring(0, 100) + '...' : message
+    // Generate preview from subtitle or message (first 100 characters)
+    const previewText = subtitle?.trim() || message.trim()
+    const preview = previewText.length > 100 ? previewText.substring(0, 100) + '...' : previewText
 
     // Create notification
     const { data: notification, error: createError } = await supabaseAdmin
@@ -3852,7 +3949,8 @@ router.post('/notifications', checkAdmin, async (req, res) => {
         user_id: userId,
         sender: sender.trim(),
         category: category.trim(),
-        subject: subject.trim(),
+        subject: subject,
+        subtitle: subtitle?.trim() || null,
         message: message.trim(),
         preview: preview,
         icon: icon.trim(),
@@ -3870,14 +3968,19 @@ router.post('/notifications', checkAdmin, async (req, res) => {
     }
 
     res.status(201).json({
-      message: 'Notification sent successfully',
+      success: true,
+      message: 'Message sent successfully',
       notification: {
         id: notification.id,
         userId: notification.user_id,
+        userEmail: user.email,
+        userName: user.full_name || user.username || 'N/A',
+        title: notification.subject,
+        subtitle: notification.subtitle,
+        message: notification.message,
+        preview: notification.preview,
         sender: notification.sender,
         category: notification.category,
-        subject: notification.subject,
-        preview: notification.preview,
         icon: notification.icon,
         isImportant: notification.is_important,
         createdAt: notification.created_at
@@ -3889,15 +3992,16 @@ router.post('/notifications', checkAdmin, async (req, res) => {
   }
 })
 
-// Send notification to multiple users
+// Send notification to multiple users (refactored for UI)
 router.post('/notifications/bulk', checkAdmin, async (req, res) => {
   try {
     const {
       userIds, // Array of user IDs
+      title, // Message title (maps to subject)
+      subtitle, // Message subtitle (optional)
+      message, // Message body
       sender = 'MarketGreen Team',
       category = 'system',
-      subject,
-      message,
       icon = 'envelope',
       isImportant = false
     } = req.body
@@ -3907,19 +4011,24 @@ router.post('/notifications/bulk', checkAdmin, async (req, res) => {
       return res.status(400).json({ error: 'User IDs array is required' })
     }
 
-    if (!subject || !message) {
-      return res.status(400).json({ error: 'Subject and message are required' })
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Message is required' })
     }
 
-    // Generate preview
-    const preview = message.length > 100 ? message.substring(0, 100) + '...' : message
+    // Use title as subject, or generate from message if not provided
+    const subject = title?.trim() || message.substring(0, 50) + (message.length > 50 ? '...' : '')
+
+    // Generate preview from subtitle or message
+    const previewText = subtitle?.trim() || message.trim()
+    const preview = previewText.length > 100 ? previewText.substring(0, 100) + '...' : previewText
 
     // Create notifications for all users
     const notifications = userIds.map(userId => ({
       user_id: userId,
       sender: sender.trim(),
       category: category.trim(),
-      subject: subject.trim(),
+      subject: subject,
+      subtitle: subtitle?.trim() || null,
       message: message.trim(),
       preview: preview,
       icon: icon.trim(),
@@ -3940,12 +4049,14 @@ router.post('/notifications/bulk', checkAdmin, async (req, res) => {
     }
 
     res.status(201).json({
-      message: `Notifications sent successfully to ${createdNotifications.length} user(s)`,
+      success: true,
+      message: `Messages sent successfully to ${createdNotifications.length} user(s)`,
       count: createdNotifications.length,
       notifications: createdNotifications.map(n => ({
         id: n.id,
         userId: n.user_id,
-        subject: n.subject
+        title: n.subject,
+        subtitle: n.subtitle
       }))
     })
   } catch (error) {
