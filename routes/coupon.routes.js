@@ -208,4 +208,37 @@ router.post('/apply', async (req, res) => {
   }
 })
 
+// Get total number of vouchers/coupons
+router.get('/count', async (req, res) => {
+  try {
+    const { active } = req.query
+
+    let query = supabaseAdmin
+      .from('coupons')
+      .select('*', { count: 'exact', head: true })
+
+    // Filter by active status if provided
+    if (active !== undefined) {
+      query = query.eq('is_active', active === 'true')
+    }
+
+    const { count, error } = await query
+
+    if (error) {
+      console.error('Error counting vouchers:', error)
+      return res.status(500).json({
+        error: 'Error fetching voucher count',
+        details: error.message
+      })
+    }
+
+    res.json({
+      total: count || 0
+    })
+  } catch (error) {
+    console.error('Get voucher count error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
