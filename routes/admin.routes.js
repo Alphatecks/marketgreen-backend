@@ -3805,4 +3805,200 @@ router.delete('/orders/:id', checkAdmin, async (req, res) => {
   }
 })
 
+// ============================================
+// NOTIFICATIONS MANAGEMENT
+// ============================================
+
+// Send notification to a specific user
+router.post('/notifications', checkAdmin, async (req, res) => {
+  try {
+    const {
+      userId,
+      sender = 'MarketGreen Team',
+      category = 'system',
+      subject,
+      message,
+      icon = 'envelope',
+      isImportant = false
+    } = req.body
+
+    // Validate required fields
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' })
+    }
+
+    if (!subject || !message) {
+      return res.status(400).json({ error: 'Subject and message are required' })
+    }
+
+    // Validate user exists
+    const { data: user, error: userError } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('id', userId)
+      .single()
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+
+    // Generate preview (first 100 characters)
+    const preview = message.length > 100 ? message.substring(0, 100) + '...' : message
+
+    // Create notification
+    const { data: notification, error: createError } = await supabaseAdmin
+      .from('notifications')
+      .insert([{
+        user_id: userId,
+        sender: sender.trim(),
+        category: category.trim(),
+        subject: subject.trim(),
+        message: message.trim(),
+        preview: preview,
+        icon: icon.trim(),
+        is_important: isImportant === true || isImportant === 'true'
+      }])
+      .select()
+      .single()
+
+    if (createError) {
+      console.error('Error creating notification:', createError)
+      return res.status(500).json({
+        error: 'Failed to send notification',
+        details: createError.message
+      })
+    }
+
+    res.status(201).json({
+      message: 'Notification sent successfully',
+      notification: {
+        id: notification.id,
+        userId: notification.user_id,
+        sender: notification.sender,
+        category: notification.category,
+        subject: notification.subject,
+        preview: notification.preview,
+        icon: notification.icon,
+        isImportant: notification.is_important,
+        createdAt: notification.created_at
+      }
+    })
+  } catch (error) {
+    console.error('Send notification error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Send notification to multiple users
+router.post('/notifications/bulk', checkAdmin, async (req, res) => {
+  try {
+    const {
+      userIds, // Array of user IDs
+      sender = 'MarketGreen Team',
+      category = 'system',
+      subject,
+      message,
+      icon = 'envelope',
+      isImportant = false
+    } = req.body
+
+    // Validate required fields
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: 'User IDs array is required' })
+    }
+
+    if (!subject || !message) {
+      return res.status(400).json({ error: 'Subject and message are required' })
+    }
+
+    // Generate preview
+    const preview = message.length > 100 ? message.substring(0, 100) + '...' : message
+
+    // Create notifications for all users
+    const notifications = userIds.map(userId => ({
+      user_id: userId,
+      sender: sender.trim(),
+      category: category.trim(),
+      subject: subject.trim(),
+      message: message.trim(),
+      preview: preview,
+      icon: icon.trim(),
+      is_important: isImportant === true || isImportant === 'true'
+    }))
+
+    const { data: createdNotifications, error: createError } = await supabaseAdmin
+      .from('notifications')
+      .insert(notifications)
+      .select()
+
+    if (createError) {
+      console.error('Error creating bulk notifications:', createError)
+      return res.status(500).json({
+        error: 'Failed to send notifications',
+        details: createError.message
+      })
+    }
+
+    res.status(201).json({
+      message: `Notifications sent successfully to ${createdNotifications.length} user(s)`,
+      count: createdNotifications.length,
+      notifications: createdNotifications.map(n => ({
+        id: n.id,
+        userId: n.user_id,
+        subject: n.subject
+      }))
+    })
+  } catch (error) {
+    console.error('Send bulk notification error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get all notifications (admin view)
+router.get('/notifications', checkAdmin, async (req, res) => {
+  try {
+    const {
+      userId, // Filter by specific user
+      limit = 50,
+      offset = 0
+    } = req.query
+
+    let query = supabaseAdmin
+      .from('notifications')
+      .select(`
+        *,
+        profiles (
+          id,
+          username,
+          email,
+          full_name
+        )
+      `)
+      .order('created_at', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    if (userId) {
+      query = query.eq('user_id', userId)
+    }
+
+    const { data: notifications, error: notificationsError } = await query
+
+    if (notificationsError) {
+      console.error('Error fetching notifications:', notificationsError)
+      return res.status(500).json({
+        error: 'Failed to fetch notifications',
+        details: notificationsError.message
+      })
+    }
+
+    res.json({
+      notifications: notifications || [],
+      count: notifications?.length || 0
+    })
+  } catch (error) {
+    console.error('Get notifications error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router

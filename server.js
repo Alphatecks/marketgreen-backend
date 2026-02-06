@@ -18,6 +18,7 @@ import reviewRoutes from './routes/review.routes.js'
 import cartRoutes from './routes/cart.routes.js'
 import wishlistRoutes from './routes/wishlist.routes.js'
 import activityRoutes from './routes/activity.routes.js'
+import notificationRoutes from './routes/notification.routes.js'
 
 // Load environment variables
 dotenv.config()
@@ -111,6 +112,7 @@ app.use('/api/reviews', reviewRoutes)
 app.use('/api/cart', cartRoutes)
 app.use('/api/wishlist', wishlistRoutes)
 app.use('/api/activity', activityRoutes)
+app.use('/api/notifications', notificationRoutes)
 
 // 404 handler
 app.use((req, res) => {
