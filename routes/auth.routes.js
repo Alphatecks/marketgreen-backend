@@ -22,7 +22,22 @@ router.post('/signup', async (req, res) => {
   fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:8',message:'Signup route - request received',data:{hasEmail:!!req.body.email,hasUsername:!!req.body.username,hasPassword:!!req.body.password,hasFullName:!!req.body.fullName,hasPhone:!!req.body.phone,emailPrefix:req.body.email?.substring(0,10)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
   // #endregion
   try {
-    const { email, username, password, fullName, phone, marketingEmails } = req.body
+    const { email, username, password, fullName, phone, phoneNumber, marketingEmails } = req.body
+
+    // Support both 'phone' and 'phoneNumber' field names
+    const phoneValue = phone || phoneNumber
+
+    // Debug: Log received phone value for troubleshooting
+    console.log('Signup request - phone received:', { 
+      phone: phoneValue, 
+      phoneField: phone ? 'phone' : phoneNumber ? 'phoneNumber' : 'none',
+      type: typeof phoneValue, 
+      isUndefined: phoneValue === undefined,
+      isNull: phoneValue === null,
+      isEmptyString: phoneValue === '',
+      length: phoneValue?.length,
+      rawBody: { phone, phoneNumber }
+    })
 
     // Validate email
     const emailValidation = validateEmail(email)
@@ -71,7 +86,7 @@ router.post('/signup', async (req, res) => {
     }
 
     // Validate phone
-    const phoneValidation = validatePhone(phone)
+    const phoneValidation = validatePhone(phoneValue)
     if (!phoneValidation.isValid) {
       return res.status(400).json({ 
         error: phoneValidation.error,
@@ -91,7 +106,7 @@ router.post('/signup', async (req, res) => {
         data: {
           username: username,
           full_name: fullName.trim(),
-          phone: phone,
+          phone: phoneValue,
           marketing_emails: marketingEmails || false
         },
         emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
@@ -130,7 +145,7 @@ router.post('/signup', async (req, res) => {
           username: username,
           email: email,
           full_name: fullName.trim(),
-          phone: phone,
+          phone: phoneValue,
           marketing_emails: marketingEmails || false,
           created_at: new Date().toISOString()
         })
@@ -172,7 +187,7 @@ router.post('/signup', async (req, res) => {
         email: data.user?.email,
         username: username,
         full_name: fullName.trim(),
-        phone: phone
+        phone: phoneValue
       },
       // Include session if email confirmation is disabled
       session: data.session || null

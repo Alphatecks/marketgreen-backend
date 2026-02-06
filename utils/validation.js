@@ -109,14 +109,23 @@ export const validateFullName = (fullName) => {
  * Phone number validation
  */
 export const validatePhone = (phone) => {
-  if (!phone) {
+  // Check if phone is missing, null, undefined, or empty string
+  if (phone === null || phone === undefined || phone === '') {
     return { isValid: false, error: 'Phone number is required' }
   }
 
-  // Remove common formatting characters
-  const cleanedPhone = phone.replace(/[\s\-\(\)\+]/g, '')
+  // Convert to string and trim whitespace
+  const phoneStr = String(phone).trim()
 
-  // Check if it's all digits
+  // Check if it's empty after trimming
+  if (phoneStr === '') {
+    return { isValid: false, error: 'Phone number is required' }
+  }
+
+  // Remove common formatting characters (spaces, dashes, parentheses, plus signs)
+  const cleanedPhone = phoneStr.replace(/[\s\-\(\)\+\.]/g, '')
+
+  // Check if it's all digits after cleaning
   if (!/^\d+$/.test(cleanedPhone)) {
     return { isValid: false, error: 'Phone number must contain only digits and formatting characters' }
   }
