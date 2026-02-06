@@ -281,5 +281,56 @@ router.put('/change-password', async (req, res) => {
   }
 })
 
+// Get total amount spent on orders
+router.get('/total-spent', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '')
+
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' })
+    }
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+
+    if (authError || !user) {
+      return res.status(401).json({ error: authError?.message || 'Invalid or expired token' })
+    }
+
+    // Get all completed orders for the user
+    const { data: orders, error: ordersError } = await supabaseAdmin
+      .from('orders')
+      .select('total_amount, status')
+      .eq('user_id', user.id)
+      .in('status', ['confirmed', 'shipped', 'delivered'])
+
+    if (ordersError) {
+      console.error('Error fetching orders:', ordersError)
+      return res.status(500).json({ 
+        error: 'Failed to fetch orders',
+        details: ordersError.message 
+      })
+    }
+
+    // Calculate total amount spent
+    const totalSpent = (orders || []).reduce((sum, order) => {
+      return sum + parseFloat(order.total_amount || 0)
+    }, 0)
+
+    // Get additional stats
+    const orderCount = orders?.length || 0
+    const averageOrderValue = orderCount > 0 ? totalSpent / orderCount : 0
+
+    res.json({
+      totalSpent: parseFloat(totalSpent.toFixed(2)),
+      orderCount,
+      averageOrderValue: parseFloat(averageOrderValue.toFixed(2)),
+      currency: 'NGN' // You can make this configurable if needed
+    })
+  } catch (error) {
+    console.error('Get total spent error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router
 
