@@ -24,9 +24,6 @@ import { testEmailConnection } from './utils/emailService.js'
 // Load environment variables
 dotenv.config()
 
-// #region agent log
-fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:15',message:'Server startup - env vars check',data:{hasSupabaseUrl:!!process.env.SUPABASE_URL,hasSupabaseKey:!!process.env.SUPABASE_ANON_KEY,hasFrontendUrl:!!process.env.FRONTEND_URL,port:process.env.PORT,nodeEnv:process.env.NODE_ENV},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-// #endregion
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -35,15 +32,9 @@ const PORT = process.env.PORT || 3000
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseKey = process.env.SUPABASE_ANON_KEY
 
-// #region agent log
-fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:24',message:'Supabase client init - before check',data:{supabaseUrlLength:supabaseUrl?.length||0,supabaseKeyLength:supabaseKey?.length||0,supabaseUrlPrefix:supabaseUrl?.substring(0,20)||'undefined',supabaseKeyPrefix:supabaseKey?.substring(0,10)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-// #endregion
 
 if (!supabaseUrl || !supabaseKey) {
   console.warn('Warning: Supabase credentials not found. Make sure to set SUPABASE_URL and SUPABASE_ANON_KEY in your .env file')
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:26',message:'WARNING: Missing Supabase credentials',data:{hasSupabaseUrl:!!supabaseUrl,hasSupabaseKey:!!supabaseKey},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
 }
 
 export const supabase = createClient(supabaseUrl || '', supabaseKey || '')
@@ -66,9 +57,6 @@ app.use(morgan('dev')) // Logging
 
 // Request logging middleware
 app.use((req, res, next) => {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:50',message:'Incoming request',data:{method:req.method,path:req.path,origin:req.headers.origin,userAgent:req.headers['user-agent']?.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`)
   next()
 })
