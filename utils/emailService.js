@@ -1,15 +1,7 @@
-import nodemailer from 'nodemailer'
+import { Resend } from 'resend'
 
-// Create reusable transporter for Gmail
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD // Use App Password, not regular password
-    }
-  })
-}
+// Initialize Resend client
+const resend = new Resend(process.env.RESEND_API_KEY)
 
 /**
  * Send welcome email to newly registered user
@@ -20,52 +12,49 @@ const createTransporter = () => {
 export const sendWelcomeEmail = async (to, name) => {
   try {
     // Validate environment variables
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-      const missingVars = []
-      if (!process.env.GMAIL_USER) missingVars.push('GMAIL_USER')
-      if (!process.env.GMAIL_APP_PASSWORD) missingVars.push('GMAIL_APP_PASSWORD')
-      
-      console.error('[EMAIL] ❌ Gmail credentials not configured. Missing:', missingVars.join(', '))
-      console.error('[EMAIL] Please set GMAIL_USER and GMAIL_APP_PASSWORD environment variables.')
-      return { success: false, error: `Email service not configured. Missing: ${missingVars.join(', ')}` }
+    if (!process.env.RESEND_API_KEY) {
+      console.error('[EMAIL] ❌ Resend API key not configured.')
+      console.error('[EMAIL] Please set RESEND_API_KEY environment variable.')
+      return { success: false, error: 'Email service not configured. Missing: RESEND_API_KEY' }
     }
 
-    console.log('[EMAIL] Creating Gmail transporter...')
-    const transporter = createTransporter()
-    
-    // Verify connection
-    try {
-      await transporter.verify()
-      console.log('[EMAIL] ✅ Gmail connection verified')
-    } catch (verifyError) {
-      console.error('[EMAIL] ❌ Gmail connection verification failed:', verifyError.message)
-      return { success: false, error: `Gmail connection failed: ${verifyError.message}` }
+    // Validate sender email
+    const fromEmail = process.env.RESEND_FROM_EMAIL || process.env.COMPANY_EMAIL || 'onboarding@resend.dev'
+    if (!fromEmail || fromEmail === 'onboarding@resend.dev') {
+      console.warn('[EMAIL] ⚠️  Using default Resend sender email. Set RESEND_FROM_EMAIL for production.')
     }
+
+    console.log('[EMAIL] Sending welcome email via Resend to:', to)
     
     // Extract first name from full name
     const firstName = name ? name.split(' ')[0] : 'there'
+    const companyName = process.env.COMPANY_NAME || 'MarketGreen'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://marketgreen.shop'
+    const companyEmail = process.env.COMPANY_EMAIL || fromEmail
     
-    const mailOptions = {
-      from: {
-        name: process.env.COMPANY_NAME || 'MarketGreen',
-        address: process.env.GMAIL_USER
-      },
+    const { data, error } = await resend.emails.send({
+      from: `${companyName} <${fromEmail}>`,
       to: to,
-      subject: `Welcome to ${process.env.COMPANY_NAME || 'MarketGreen'}! 🎉`,
-      html: getWelcomeEmailTemplate(firstName, process.env.FRONTEND_URL || 'https://marketgreen.shop')
+      subject: `Welcome to ${companyName}! 🎉`,
+      html: getWelcomeEmailTemplate(firstName, frontendUrl, companyName, companyEmail)
+    })
+
+    if (error) {
+      console.error('[EMAIL] ❌ Error sending welcome email:', {
+        to: to,
+        error: error.message,
+        name: error.name
+      })
+      return { success: false, error: error.message }
     }
 
-    console.log('[EMAIL] Sending welcome email to:', to)
-    const info = await transporter.sendMail(mailOptions)
-    console.log('[EMAIL] ✅ Welcome email sent successfully. Message ID:', info.messageId)
-    return { success: true, messageId: info.messageId }
+    console.log('[EMAIL] ✅ Welcome email sent successfully. Message ID:', data?.id)
+    return { success: true, messageId: data?.id }
   } catch (error) {
-    console.error('[EMAIL] ❌ Error sending welcome email:', {
+    console.error('[EMAIL] ❌ Exception sending welcome email:', {
       to: to,
       error: error.message,
-      code: error.code,
-      command: error.command,
-      response: error.response
+      stack: error.stack
     })
     // Don't throw error - email failure shouldn't break signup
     return { success: false, error: error.message }
@@ -76,12 +65,11 @@ export const sendWelcomeEmail = async (to, name) => {
  * Generate HTML template for welcome email
  * @param {string} firstName - User's first name
  * @param {string} frontendUrl - Frontend URL for links
+ * @param {string} companyName - Company name
+ * @param {string} companyEmail - Company support email
  * @returns {string} - HTML email template
  */
-const getWelcomeEmailTemplate = (firstName, frontendUrl) => {
-  const companyName = process.env.COMPANY_NAME || 'MarketGreen'
-  const companyEmail = process.env.GMAIL_USER || 'support@marketgreen.shop'
-  
+const getWelcomeEmailTemplate = (firstName, frontendUrl, companyName, companyEmail) => {
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -198,13 +186,13 @@ const getWelcomeEmailTemplate = (firstName, frontendUrl) => {
  */
 export const testEmailConnection = async () => {
   try {
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    if (!process.env.RESEND_API_KEY) {
       return false
     }
     
-    const transporter = createTransporter()
-    await transporter.verify()
-    return true
+    // Resend doesn't have a verify method like nodemailer
+    // We can test by checking if the API key is set and the client is initialized
+    return !!resend && !!process.env.RESEND_API_KEY
   } catch (error) {
     console.error('Email connection test failed:', error)
     return false

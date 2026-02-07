@@ -66,7 +66,7 @@ app.use(express.urlencoded({ extended: true }))
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
-  const emailConfigured = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  const emailConfigured = !!process.env.RESEND_API_KEY
   let emailConnectionStatus = 'not configured'
   
   if (emailConfigured) {
@@ -149,10 +149,11 @@ app.listen(PORT, async () => {
   console.log(`🔑 Supabase Key configured: ${!!process.env.SUPABASE_ANON_KEY}`)
   
   // Check email configuration
-  const emailConfigured = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  const emailConfigured = !!process.env.RESEND_API_KEY
   if (emailConfigured) {
-    console.log(`📧 Gmail User configured: ${process.env.GMAIL_USER.substring(0, 3)}***`)
-    console.log(`📧 Gmail App Password configured: ${process.env.GMAIL_APP_PASSWORD ? 'Yes' : 'No'}`)
+    const fromEmail = process.env.RESEND_FROM_EMAIL || process.env.COMPANY_EMAIL || 'onboarding@resend.dev'
+    console.log(`📧 Resend API Key configured: ${process.env.RESEND_API_KEY.substring(0, 7)}***`)
+    console.log(`📧 Resend From Email: ${fromEmail}`)
     try {
       const isConnected = await testEmailConnection()
       if (isConnected) {
@@ -164,8 +165,8 @@ app.listen(PORT, async () => {
       console.log(`📧 ❌ Email service: Connection error - ${error.message}`)
     }
   } else {
-    console.log(`📧 ⚠️  Email service: Not configured (GMAIL_USER and/or GMAIL_APP_PASSWORD missing)`)
-    console.log(`📧    Welcome emails will not be sent. Set environment variables to enable.`)
+    console.log(`📧 ⚠️  Email service: Not configured (RESEND_API_KEY missing)`)
+    console.log(`📧    Welcome emails will not be sent. Set RESEND_API_KEY environment variable to enable.`)
   }
 })
 

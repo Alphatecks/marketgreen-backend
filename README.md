@@ -42,13 +42,14 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
    FRONTEND_URL=http://localhost:5173
    PORT=3000
    
-   # Gmail Configuration (for welcome emails)
-   GMAIL_USER=your-company-email@gmail.com
-   GMAIL_APP_PASSWORD=your-gmail-app-password
+   # Resend Configuration (for welcome emails)
+   RESEND_API_KEY=re_your_resend_api_key
+   RESEND_FROM_EMAIL=noreply@yourdomain.com
    COMPANY_NAME=MarketGreen
+   COMPANY_EMAIL=support@yourdomain.com
    ```
    
-   **Note:** For Gmail, you need to use an [App Password](https://support.google.com/accounts/answer/185833) instead of your regular password. See the [Email Configuration](#-email-configuration) section below for detailed setup instructions.
+   **Note:** You need a Resend account and API key. See the [Email Configuration](#-email-configuration) section below for detailed setup instructions.
 
 3. **Run the development server:**
    ```bash
@@ -59,38 +60,44 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
 
 ## 📧 Email Configuration
 
-The application sends welcome emails to newly registered users using Gmail. 
+The application sends welcome emails to newly registered users using Resend. 
 
 **⚠️ Important:** Supabase sends email confirmation emails by default, which can conflict with your welcome email. See [SUPABASE_EMAIL_SETUP.md](./SUPABASE_EMAIL_SETUP.md) for configuration options.
 
-To set up Gmail email sending:
+To set up Resend email sending:
 
-### Gmail App Password Setup
+### Resend Setup
 
-1. **Enable 2-Step Verification** on your Google Account:
-   - Go to [Google Account Security](https://myaccount.google.com/security)
-   - Enable 2-Step Verification if not already enabled
+1. **Create a Resend Account**:
+   - Go to [Resend](https://resend.com) and sign up for an account
+   - Verify your email address
 
-2. **Generate an App Password**:
-   - Go to [App Passwords](https://myaccount.google.com/apppasswords)
-   - Select "Mail" as the app and "Other (Custom name)" as the device
-   - Enter "MarketGreen Backend" as the custom name
-   - Click "Generate"
-   - Copy the 16-character password (spaces will be ignored)
+2. **Get Your API Key**:
+   - Navigate to the [API Keys](https://resend.com/api-keys) section in your dashboard
+   - Click "Create API Key"
+   - Give it a name (e.g., "MarketGreen Backend")
+   - Copy the API key (starts with `re_`)
 
-3. **Add to Environment Variables**:
+3. **Verify Your Domain** (Recommended for Production):
+   - Go to [Domains](https://resend.com/domains) in your dashboard
+   - Add and verify your domain
+   - This allows you to send from your own domain (e.g., `noreply@yourdomain.com`)
+   - For testing, you can use `onboarding@resend.dev` (default)
+
+4. **Add to Environment Variables**:
    ```env
-   GMAIL_USER=your-company-email@gmail.com
-   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+   RESEND_API_KEY=re_your_resend_api_key
+   RESEND_FROM_EMAIL=noreply@yourdomain.com
    COMPANY_NAME=MarketGreen
+   COMPANY_EMAIL=support@yourdomain.com
    ```
 
-4. **Test the Configuration**:
+5. **Test the Configuration**:
    The email service will automatically attempt to send welcome emails when users register. Check your server logs to verify emails are being sent successfully.
 
 **Important Notes:**
-- Use the App Password (not your regular Gmail password)
-- The App Password is a 16-character code (you can ignore spaces)
+- For production, use a verified domain email address in `RESEND_FROM_EMAIL`
+- For testing, you can use `onboarding@resend.dev` (default if `RESEND_FROM_EMAIL` is not set)
 - If email sending fails, the user registration will still succeed (emails are sent asynchronously)
 - Welcome emails are sent automatically when a new user signs up via `/api/auth/signup`
 
@@ -187,8 +194,9 @@ CREATE TABLE orders (
    - `SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `FRONTEND_URL` (your frontend URL)
-   - `GMAIL_USER` (your company Gmail address)
-   - `GMAIL_APP_PASSWORD` (Gmail App Password - see Email Configuration section)
+   - `RESEND_API_KEY` (your Resend API key - see Email Configuration section)
+   - `RESEND_FROM_EMAIL` (your verified domain email address)
+   - `COMPANY_EMAIL` (optional, for support contact)
    - `COMPANY_NAME` (optional, defaults to "MarketGreen")
    - `NODE_ENV=production`
    - `PORT=3000` (Render sets this automatically)

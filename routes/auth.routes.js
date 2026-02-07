@@ -167,10 +167,9 @@ router.post('/signup', async (req, res) => {
     // Send email regardless of profile creation success
     if (data.user) {
       console.log('[EMAIL] Attempting to send welcome email to:', email)
-      console.log('[EMAIL] Gmail config check:', {
-        hasGmailUser: !!process.env.GMAIL_USER,
-        hasGmailPassword: !!process.env.GMAIL_APP_PASSWORD,
-        gmailUser: process.env.GMAIL_USER ? `${process.env.GMAIL_USER.substring(0, 3)}***` : 'not set'
+      console.log('[EMAIL] Resend config check:', {
+        hasResendApiKey: !!process.env.RESEND_API_KEY,
+        fromEmail: process.env.RESEND_FROM_EMAIL || process.env.COMPANY_EMAIL || 'onboarding@resend.dev'
       })
       
       sendWelcomeEmail(email, fullName.trim() || username)
@@ -181,8 +180,8 @@ router.post('/signup', async (req, res) => {
             console.error('[EMAIL] ❌ Welcome email failed to send:', {
               email: email,
               error: result.error,
-              reason: !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD 
-                ? 'Gmail credentials not configured' 
+              reason: !process.env.RESEND_API_KEY 
+                ? 'Resend API key not configured' 
                 : 'Email service error'
             })
           }
