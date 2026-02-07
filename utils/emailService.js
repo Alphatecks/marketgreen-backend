@@ -522,6 +522,292 @@ const getOrderConfirmationEmailTemplate = (order, firstName, frontendUrl, compan
 }
 
 /**
+ * Send order status update email to customer
+ * @param {string} to - Recipient email address
+ * @param {Object} order - Order object with updated status
+ * @param {string} userName - User's full name or username
+ * @param {string} oldStatus - Previous order status
+ * @param {string} newStatus - New order status
+ * @returns {Promise<Object>} - Result of email sending
+ */
+export const sendOrderStatusUpdateEmail = async (to, order, userName, oldStatus, newStatus) => {
+  try {
+    // Validate environment variables
+    if (!process.env.RESEND_API_KEY) {
+      console.error('[EMAIL] ❌ Resend API key not configured.')
+      return { success: false, error: 'Email service not configured. Missing: RESEND_API_KEY' }
+    }
+
+    // Validate sender email
+    const fromEmail = process.env.RESEND_FROM_EMAIL || process.env.COMPANY_EMAIL || 'onboarding@resend.dev'
+    
+    console.log('[EMAIL] Sending order status update email via Resend to:', to)
+    
+    // Extract first name from full name
+    const firstName = userName ? userName.split(' ')[0] : 'there'
+    const companyName = process.env.COMPANY_NAME || 'MarketGreen'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://marketgreen.shop'
+    const companyEmail = process.env.COMPANY_EMAIL || fromEmail
+    
+    // Get status-specific subject and message
+    const statusInfo = getStatusUpdateInfo(newStatus, order.order_number || order.id.substring(0, 8))
+    
+    const { data, error } = await resend.emails.send({
+      from: `${companyName} <${fromEmail}>`,
+      to: to,
+      subject: statusInfo.subject,
+      html: getOrderStatusUpdateEmailTemplate(order, firstName, oldStatus, newStatus, statusInfo, frontendUrl, companyName, companyEmail)
+    })
+
+    if (error) {
+      console.error('[EMAIL] ❌ Error sending order status update email:', {
+        to: to,
+        error: error.message,
+        name: error.name
+      })
+      return { success: false, error: error.message }
+    }
+
+    console.log('[EMAIL] ✅ Order status update email sent successfully. Message ID:', data?.id)
+    return { success: true, messageId: data?.id }
+  } catch (error) {
+    console.error('[EMAIL] ❌ Exception sending order status update email:', {
+      to: to,
+      error: error.message,
+      stack: error.stack
+    })
+    return { success: false, error: error.message }
+  }
+}
+
+/**
+ * Get status-specific information for email
+ * @param {string} status - Order status
+ * @param {string} orderNumber - Order number
+ * @returns {Object} - Status info with subject and message
+ */
+const getStatusUpdateInfo = (status, orderNumber) => {
+  const statusMap = {
+    'processing': {
+      subject: `Your Order #${orderNumber} is Being Processed`,
+      icon: '⚙️',
+      message: 'We\'ve received your order and our team is now preparing it for shipment.',
+      color: '#3b82f6'
+    },
+    'confirmed': {
+      subject: `Order Confirmed - #${orderNumber}`,
+      icon: '✅',
+      message: 'Your order has been confirmed and is ready for processing.',
+      color: '#10b981'
+    },
+    'shipped': {
+      subject: `Your Order #${orderNumber} Has Shipped! 🚚`,
+      icon: '🚚',
+      message: 'Great news! Your order has been shipped and is on its way to you.',
+      color: '#8b5cf6'
+    },
+    'delivered': {
+      subject: `Order Delivered - #${orderNumber} 🎉`,
+      icon: '🎉',
+      message: 'Your order has been delivered! We hope you enjoy your purchase.',
+      color: '#059669'
+    },
+    'canceled': {
+      subject: `Order Cancelled - #${orderNumber}`,
+      icon: '❌',
+      message: 'Your order has been cancelled. If you have any questions, please contact our support team.',
+      color: '#ef4444'
+    },
+    'refunded': {
+      subject: `Refund Processed - Order #${orderNumber}`,
+      icon: '💰',
+      message: 'Your refund has been processed. The amount will be credited back to your original payment method.',
+      color: '#6b7280'
+    }
+  }
+  
+  return statusMap[status?.toLowerCase()] || {
+    subject: `Order Status Updated - #${orderNumber}`,
+    icon: '📦',
+    message: `Your order status has been updated to ${status}.`,
+    color: '#6b7280'
+  }
+}
+
+/**
+ * Generate HTML template for order status update email
+ * @param {Object} order - Order object
+ * @param {string} firstName - User's first name
+ * @param {string} oldStatus - Previous status
+ * @param {string} newStatus - New status
+ * @param {Object} statusInfo - Status-specific information
+ * @param {string} frontendUrl - Frontend URL for links
+ * @param {string} companyName - Company name
+ * @param {string} companyEmail - Company support email
+ * @returns {string} - HTML email template
+ */
+const getOrderStatusUpdateEmailTemplate = (order, firstName, oldStatus, newStatus, statusInfo, frontendUrl, companyName, companyEmail) => {
+  const orderNumber = order.order_number || order.id.substring(0, 8).toUpperCase()
+  const orderDate = new Date(order.created_at).toLocaleDateString('en-US', { 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric'
+  })
+  
+  // Format currency
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-NG', {
+      style: 'currency',
+      currency: 'NGN'
+    }).format(amount || 0)
+  }
+
+  // Generate order items HTML (if available)
+  const items = Array.isArray(order.items) ? order.items : []
+  const itemsHtml = items.length > 0 ? items.slice(0, 3).map(item => {
+    const productName = item.name || item.product_name || 'Product'
+    const quantity = item.quantity || 1
+    return `
+      <tr>
+        <td style="padding: 8px 0; color: #4b5563; font-size: 14px;">
+          ${productName} × ${quantity}
+        </td>
+      </tr>
+    `
+  }).join('') : '<tr><td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Order items</td></tr>'
+
+  // Tracking number section (if shipped)
+  const trackingSection = newStatus === 'shipped' && order.tracking_number ? `
+    <div style="padding: 20px; background-color: #f0f9ff; border-left: 4px solid ${statusInfo.color}; border-radius: 8px; margin: 20px 0;">
+      <p style="margin: 0 0 10px 0; color: #1f2937; font-size: 14px; font-weight: 600;">Tracking Number:</p>
+      <p style="margin: 0; color: ${statusInfo.color}; font-size: 18px; font-weight: 700; font-family: monospace;">${order.tracking_number}</p>
+    </div>
+  ` : ''
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order Status Update - ${companyName}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f5f5f5;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <table role="presentation" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); overflow: hidden;">
+          
+          <!-- Header with status color -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${statusInfo.color} 0%, ${statusInfo.color}dd 100%); padding: 40px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;">
+                ${statusInfo.icon} ${statusInfo.subject.split(' - ')[0]}
+              </h1>
+            </td>
+          </tr>
+          
+          <!-- Main Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0 0 20px 0; color: #1f2937; font-size: 18px; line-height: 1.6;">
+                Hi ${firstName},
+              </p>
+              
+              <p style="margin: 0 0 20px 0; color: #4b5563; font-size: 16px; line-height: 1.6;">
+                ${statusInfo.message}
+              </p>
+              
+              <!-- Order Details Card -->
+              <table role="presentation" style="width: 100%; margin: 20px 0; background-color: #f9fafb; border-radius: 8px; overflow: hidden;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                      <tr>
+                        <td style="padding-bottom: 10px;">
+                          <p style="margin: 0; color: #6b7280; font-size: 14px;">Order Number</p>
+                          <p style="margin: 5px 0 0 0; color: #1f2937; font-size: 18px; font-weight: 600;">${orderNumber}</p>
+                        </td>
+                        <td align="right" style="padding-bottom: 10px;">
+                          <p style="margin: 0; color: #6b7280; font-size: 14px;">Order Total</p>
+                          <p style="margin: 5px 0 0 0; color: #1f2937; font-size: 18px; font-weight: 600;">${formatCurrency(order.total_amount)}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="2" style="padding-top: 15px; border-top: 1px solid #e5e7eb;">
+                          <p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">Order Date</p>
+                          <p style="margin: 0; color: #1f2937; font-size: 14px;">${orderDate}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="2" style="padding-top: 10px;">
+                          <p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">Status</p>
+                          <span style="display: inline-block; padding: 6px 12px; background-color: ${statusInfo.color}20; color: ${statusInfo.color}; border-radius: 6px; font-size: 14px; font-weight: 600; margin-top: 5px;">
+                            ${newStatus.charAt(0).toUpperCase() + newStatus.slice(1)}
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              
+              ${trackingSection}
+              
+              <!-- Order Items Preview -->
+              ${items.length > 0 ? `
+              <h2 style="margin: 30px 0 15px 0; color: #1f2937; font-size: 18px; font-weight: 600;">Order Items</h2>
+              <table role="presentation" style="width: 100%; margin-bottom: 20px; border-collapse: collapse;">
+                ${itemsHtml}
+                ${items.length > 3 ? '<tr><td style="padding: 8px 0; color: #9ca3af; font-size: 12px;">... and more</td></tr>' : ''}
+              </table>
+              ` : ''}
+              
+              <!-- CTA Button -->
+              <table role="presentation" style="width: 100%; margin: 30px 0;">
+                <tr>
+                  <td align="center" style="padding: 0;">
+                    <a href="${frontendUrl}/orders/${order.id}" style="display: inline-block; padding: 16px 32px; background: linear-gradient(135deg, ${statusInfo.color} 0%, ${statusInfo.color}dd 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                      View Order Details
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              
+              <p style="margin: 30px 0 0 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                If you have any questions about your order, feel free to reach out to our support team. We're here to help!
+              </p>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 30px; background-color: #f9fafb; border-top: 1px solid #e5e7eb; text-align: center;">
+              <p style="margin: 0 0 10px 0; color: #6b7280; font-size: 14px;">
+                <strong style="color: #1f2937;">${companyName}</strong><br>
+                Your trusted partner for sustainable shopping
+              </p>
+              <p style="margin: 15px 0 10px 0; color: #9ca3af; font-size: 12px;">
+                <a href="${frontendUrl}" style="color: ${statusInfo.color}; text-decoration: none;">Visit our website</a> | 
+                <a href="mailto:${companyEmail}" style="color: ${statusInfo.color}; text-decoration: none;">Contact Support</a>
+              </p>
+              <p style="margin: 20px 0 0 0; color: #9ca3af; font-size: 11px; line-height: 1.5;">
+                This email was sent regarding your order ${orderNumber} with ${companyName}.<br>
+                If you have any concerns, please contact our support team.
+              </p>
+            </td>
+          </tr>
+          
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim()
+}
+
+/**
  * Test email configuration
  * @returns {Promise<boolean>} - True if email service is properly configured
  */

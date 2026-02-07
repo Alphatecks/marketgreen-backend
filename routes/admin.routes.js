@@ -10,6 +10,7 @@ import {
   ALLOWED_CATEGORIES
 } from '../utils/productValidation.js'
 import { convertProductFields } from '../utils/fieldConverter.js'
+import { sendOrderStatusUpdateEmail } from '../utils/emailService.js'
 
 const router = express.Router()
 
@@ -3669,15 +3670,30 @@ router.put('/orders/:id/status', checkAdmin, async (req, res) => {
       })
     }
 
-    // Check if order exists
+    // Check if order exists and get current status
     const { data: order, error: checkError } = await supabaseAdmin
       .from('orders')
-      .select('id, status, order_number')
+      .select('id, status, order_number, user_id')
       .eq('id', id)
       .single()
 
     if (checkError || !order) {
       return res.status(404).json({ error: 'Order not found' })
+    }
+
+    // Store old status for email notification
+    const oldStatus = order.status
+
+    // Skip update if status hasn't changed
+    if (oldStatus === status) {
+      return res.json({
+        message: 'Order status unchanged',
+        order: {
+          id: order.id,
+          orderNumber: order.order_number,
+          status: status
+        }
+      })
     }
 
     // Prepare update data
@@ -3733,6 +3749,50 @@ router.put('/orders/:id/status', checkAdmin, async (req, res) => {
         error: 'Failed to update order status',
         details: updateError.message
       })
+    }
+
+    // Send email notification to user (non-blocking)
+    if (order.user_id && oldStatus !== status) {
+      // Fetch user profile to get email and name
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .select('email, full_name, username')
+        .eq('id', order.user_id)
+        .single()
+
+      if (!profileError && profile && profile.email) {
+        const userName = profile.full_name || profile.username || 'Customer'
+        const userEmail = profile.email
+
+        console.log('[EMAIL] Sending order status update email for order:', updatedOrder.order_number)
+        
+        sendOrderStatusUpdateEmail(userEmail, updatedOrder, userName, oldStatus, status)
+          .then(result => {
+            if (result.success) {
+              console.log('[EMAIL] ✅ Order status update email sent successfully. Message ID:', result.messageId)
+            } else {
+              console.error('[EMAIL] ❌ Order status update email failed to send:', {
+                orderId: id,
+                email: userEmail,
+                error: result.error
+              })
+            }
+          })
+          .catch(error => {
+            console.error('[EMAIL] ❌ Exception sending order status update email:', {
+              orderId: id,
+              email: userEmail,
+              error: error.message
+            })
+            // Email failure should not affect status update
+          })
+      } else {
+        console.warn('[EMAIL] ⚠️  Could not fetch user profile for order status email:', {
+          orderId: id,
+          userId: order.user_id,
+          error: profileError?.message
+        })
+      }
     }
 
     res.json({
