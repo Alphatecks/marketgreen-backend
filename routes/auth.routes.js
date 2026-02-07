@@ -1,5 +1,5 @@
 import express from 'express'
-import { supabase } from '../config/supabase.js'
+import { supabase, supabaseAdmin } from '../config/supabase.js'
 import { validatePassword, validateEmail, validateUsername, validateFullName, validatePhone } from '../utils/validation.js'
 import { sendWelcomeEmail } from '../utils/emailService.js'
 
@@ -95,23 +95,70 @@ router.post('/signup', async (req, res) => {
     }
 
     // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:40',message:'Signup - before Supabase call',data:{hasSupabaseClient:!!supabase,frontendUrl:process.env.FRONTEND_URL||'http://localhost:5173'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:40',message:'Signup - before Supabase call',data:{hasSupabaseClient:!!supabase,hasSupabaseAdmin:!!supabaseAdmin,frontendUrl:process.env.FRONTEND_URL||'http://localhost:5173'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
     // #endregion
 
-    // Sign up user with Supabase
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
+    // Sign up user with Supabase Admin client to auto-confirm email
+    // This ensures users can login immediately and welcome email is sent reliably
+    let data, error, session
+    
+    if (supabaseAdmin) {
+      // Use admin client to create user with auto-confirmed email (permanent solution)
+      console.log('[AUTH] Using admin client to create user with auto-confirmed email')
+      const { data: adminData, error: adminError } = await supabaseAdmin.auth.admin.createUser({
+        email: email.trim().toLowerCase(),
+        password,
+        email_confirm: true, // Auto-confirm email - bypasses Supabase email confirmation
+        user_metadata: {
           username: username,
           full_name: fullName.trim(),
           phone: phoneValue,
           marketing_emails: marketingEmails || false
-        },
-        emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
+        }
+      })
+      
+      if (adminError) {
+        error = adminError
+        data = null
+      } else if (adminData?.user) {
+        // Sign in the user to get a session (user is already confirmed)
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim().toLowerCase(),
+          password
+        })
+        
+        if (signInError) {
+          console.warn('[AUTH] Could not create session after admin user creation:', signInError.message)
+          // User is created but session creation failed - still proceed
+        }
+        
+        data = {
+          user: adminData.user,
+          session: signInData?.session || null
+        }
+        session = signInData?.session || null
+        error = null
       }
-    })
+    } else {
+      // Fallback to regular signup if admin client is not available
+      console.warn('[AUTH] Admin client not available, using regular signup. Set SUPABASE_SERVICE_ROLE_KEY for auto-confirmation.')
+      const signUpResult = await supabase.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: {
+          data: {
+            username: username,
+            full_name: fullName.trim(),
+            phone: phoneValue,
+            marketing_emails: marketingEmails || false
+          },
+          emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
+        }
+      })
+      data = signUpResult.data
+      error = signUpResult.error
+      session = signUpResult.data?.session || null
+    }
 
     // #region agent log
     fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:52',message:'Signup - Supabase response',data:{hasError:!!error,hasData:!!data,hasUser:!!data?.user,hasSession:!!data?.session,errorMessage:error?.message||null,errorCode:error?.status||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
@@ -165,7 +212,7 @@ router.post('/signup', async (req, res) => {
 
     // Send welcome email (non-blocking - don't fail signup if email fails)
     // Send email regardless of profile creation success
-    if (data.user) {
+    if (data?.user) {
       console.log('[EMAIL] Attempting to send welcome email to:', email)
       console.log('[EMAIL] Gmail config check:', {
         hasGmailUser: !!process.env.GMAIL_USER,
@@ -173,28 +220,28 @@ router.post('/signup', async (req, res) => {
         gmailUser: process.env.GMAIL_USER ? `${process.env.GMAIL_USER.substring(0, 3)}***` : 'not set'
       })
       
-      sendWelcomeEmail(email, fullName.trim() || username)
-        .then(result => {
-          if (result.success) {
-            console.log('[EMAIL] ✅ Welcome email sent successfully to:', email, 'Message ID:', result.messageId)
-          } else {
-            console.error('[EMAIL] ❌ Welcome email failed to send:', {
-              email: email,
-              error: result.error,
-              reason: !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD 
-                ? 'Gmail credentials not configured' 
-                : 'Email service error'
-            })
-          }
-        })
-        .catch(error => {
-          console.error('[EMAIL] ❌ Exception sending welcome email:', {
+      // Send welcome email with better error handling
+      try {
+        const emailResult = await sendWelcomeEmail(email, fullName.trim() || username)
+        if (emailResult.success) {
+          console.log('[EMAIL] ✅ Welcome email sent successfully to:', email, 'Message ID:', emailResult.messageId)
+        } else {
+          console.error('[EMAIL] ❌ Welcome email failed to send:', {
             email: email,
-            error: error.message,
-            stack: error.stack
+            error: emailResult.error,
+            reason: !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD 
+              ? 'Gmail credentials not configured' 
+              : 'Email service error'
           })
-          // Email failure should not affect signup success
+        }
+      } catch (emailError) {
+        console.error('[EMAIL] ❌ Exception sending welcome email:', {
+          email: email,
+          error: emailError.message,
+          stack: emailError.stack
         })
+        // Email failure should not affect signup success
+      }
     }
 
     // #region agent log
@@ -203,14 +250,14 @@ router.post('/signup', async (req, res) => {
     res.status(201).json({
       message: 'Account created successfully',
       user: {
-        id: data.user?.id,
-        email: data.user?.email,
+        id: data?.user?.id,
+        email: data?.user?.email,
         username: username,
         full_name: fullName.trim(),
         phone: phoneValue
       },
-      // Include session if email confirmation is disabled
-      session: data.session || null
+      // Session is always included when using admin client (email auto-confirmed)
+      session: session || data?.session || null
     })
   } catch (error) {
     // #region agent log
