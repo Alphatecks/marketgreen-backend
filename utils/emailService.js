@@ -21,11 +21,26 @@ export const sendWelcomeEmail = async (to, name) => {
   try {
     // Validate environment variables
     if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-      console.warn('Gmail credentials not configured. Skipping welcome email.')
-      return { success: false, error: 'Email service not configured' }
+      const missingVars = []
+      if (!process.env.GMAIL_USER) missingVars.push('GMAIL_USER')
+      if (!process.env.GMAIL_APP_PASSWORD) missingVars.push('GMAIL_APP_PASSWORD')
+      
+      console.error('[EMAIL] ❌ Gmail credentials not configured. Missing:', missingVars.join(', '))
+      console.error('[EMAIL] Please set GMAIL_USER and GMAIL_APP_PASSWORD environment variables.')
+      return { success: false, error: `Email service not configured. Missing: ${missingVars.join(', ')}` }
     }
 
+    console.log('[EMAIL] Creating Gmail transporter...')
     const transporter = createTransporter()
+    
+    // Verify connection
+    try {
+      await transporter.verify()
+      console.log('[EMAIL] ✅ Gmail connection verified')
+    } catch (verifyError) {
+      console.error('[EMAIL] ❌ Gmail connection verification failed:', verifyError.message)
+      return { success: false, error: `Gmail connection failed: ${verifyError.message}` }
+    }
     
     // Extract first name from full name
     const firstName = name ? name.split(' ')[0] : 'there'
@@ -40,11 +55,18 @@ export const sendWelcomeEmail = async (to, name) => {
       html: getWelcomeEmailTemplate(firstName, process.env.FRONTEND_URL || 'https://marketgreen.shop')
     }
 
+    console.log('[EMAIL] Sending welcome email to:', to)
     const info = await transporter.sendMail(mailOptions)
-    console.log('Welcome email sent successfully:', info.messageId)
+    console.log('[EMAIL] ✅ Welcome email sent successfully. Message ID:', info.messageId)
     return { success: true, messageId: info.messageId }
   } catch (error) {
-    console.error('Error sending welcome email:', error)
+    console.error('[EMAIL] ❌ Error sending welcome email:', {
+      to: to,
+      error: error.message,
+      code: error.code,
+      command: error.command,
+      response: error.response
+    })
     // Don't throw error - email failure shouldn't break signup
     return { success: false, error: error.message }
   }

@@ -59,7 +59,11 @@ Backend API for the MarketGreen e-commerce platform, built with Express.js, Supa
 
 ## 📧 Email Configuration
 
-The application sends welcome emails to newly registered users using Gmail. To set this up:
+The application sends welcome emails to newly registered users using Gmail. 
+
+**⚠️ Important:** Supabase sends email confirmation emails by default, which can conflict with your welcome email. See [SUPABASE_EMAIL_SETUP.md](./SUPABASE_EMAIL_SETUP.md) for configuration options.
+
+To set up Gmail email sending:
 
 ### Gmail App Password Setup
 

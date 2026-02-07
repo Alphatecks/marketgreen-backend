@@ -19,6 +19,7 @@ import cartRoutes from './routes/cart.routes.js'
 import wishlistRoutes from './routes/wishlist.routes.js'
 import activityRoutes from './routes/activity.routes.js'
 import notificationRoutes from './routes/notification.routes.js'
+import { testEmailConnection } from './utils/emailService.js'
 
 // Load environment variables
 dotenv.config()
@@ -76,11 +77,29 @@ app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const emailConfigured = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  let emailConnectionStatus = 'not configured'
+  
+  if (emailConfigured) {
+    try {
+      const isConnected = await testEmailConnection()
+      emailConnectionStatus = isConnected ? 'connected' : 'connection failed'
+    } catch (error) {
+      emailConnectionStatus = 'error: ' + error.message
+    }
+  }
+  
   res.status(200).json({
     status: 'OK',
     message: 'MarketGreen API is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    services: {
+      email: {
+        configured: emailConfigured,
+        status: emailConnectionStatus
+      }
+    }
   })
 })
 
@@ -132,7 +151,7 @@ app.use((err, req, res, next) => {
 })
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 MarketGreen API server running on port ${PORT}`)
   console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`)
   console.log(`🔗 Health check: http://localhost:${PORT}/health`)
@@ -140,6 +159,26 @@ app.listen(PORT, () => {
   console.log(`✅ CORS allowed origins: All (development mode)`)
   console.log(`🔑 Supabase URL configured: ${!!process.env.SUPABASE_URL}`)
   console.log(`🔑 Supabase Key configured: ${!!process.env.SUPABASE_ANON_KEY}`)
+  
+  // Check email configuration
+  const emailConfigured = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  if (emailConfigured) {
+    console.log(`📧 Gmail User configured: ${process.env.GMAIL_USER.substring(0, 3)}***`)
+    console.log(`📧 Gmail App Password configured: ${process.env.GMAIL_APP_PASSWORD ? 'Yes' : 'No'}`)
+    try {
+      const isConnected = await testEmailConnection()
+      if (isConnected) {
+        console.log(`📧 ✅ Email service: Connected and ready`)
+      } else {
+        console.log(`📧 ⚠️  Email service: Configuration present but connection failed`)
+      }
+    } catch (error) {
+      console.log(`📧 ❌ Email service: Connection error - ${error.message}`)
+    }
+  } else {
+    console.log(`📧 ⚠️  Email service: Not configured (GMAIL_USER and/or GMAIL_APP_PASSWORD missing)`)
+    console.log(`📧    Welcome emails will not be sent. Set environment variables to enable.`)
+  }
 })
 
 export default app
