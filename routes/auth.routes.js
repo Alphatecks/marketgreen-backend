@@ -118,26 +118,27 @@ router.post('/signup', async (req, res) => {
       })
       
       if (adminError) {
+        console.error('[AUTH] Admin user creation error:', adminError)
         error = adminError
         data = null
+        session = null
       } else if (adminData?.user) {
-        // Sign in the user to get a session (user is already confirmed)
-        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-          email: email.trim().toLowerCase(),
-          password
-        })
-        
-        if (signInError) {
-          console.warn('[AUTH] Could not create session after admin user creation:', signInError.message)
-          // User is created but session creation failed - still proceed
-        }
+        // User created successfully with admin client (email auto-confirmed)
+        // Return user immediately - frontend can handle login since email is confirmed
+        console.log('[AUTH] User created successfully with admin client, email auto-confirmed')
         
         data = {
           user: adminData.user,
-          session: signInData?.session || null
+          session: null // User is confirmed, frontend can login immediately
         }
-        session = signInData?.session || null
+        session = null
         error = null
+      } else {
+        // Unexpected: adminData exists but no user
+        console.error('[AUTH] Admin user creation returned data but no user object:', adminData)
+        error = { message: 'User creation failed - no user data returned' }
+        data = null
+        session = null
       }
     } else {
       // Fallback to regular signup if admin client is not available
@@ -256,7 +257,7 @@ router.post('/signup', async (req, res) => {
         full_name: fullName.trim(),
         phone: phoneValue
       },
-      // Session is always included when using admin client (email auto-confirmed)
+      // Session may be null when using admin client - user is auto-confirmed and can login immediately
       session: session || data?.session || null
     })
   } catch (error) {
