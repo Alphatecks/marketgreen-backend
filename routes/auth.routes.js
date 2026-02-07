@@ -1,5 +1,5 @@
 import express from 'express'
-import { supabase, supabaseAdmin } from '../config/supabase.js'
+import { supabase } from '../config/supabase.js'
 import { validatePassword, validateEmail, validateUsername, validateFullName, validatePhone } from '../utils/validation.js'
 import { sendWelcomeEmail } from '../utils/emailService.js'
 
@@ -18,6 +18,9 @@ router.get('/signup', (req, res) => {
 
 // Signup endpoint - matches the UI form
 router.post('/signup', async (req, res) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:8',message:'Signup route - request received',data:{hasEmail:!!req.body.email,hasUsername:!!req.body.username,hasPassword:!!req.body.password,hasFullName:!!req.body.fullName,hasPhone:!!req.body.phone,emailPrefix:req.body.email?.substring(0,10)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
   try {
     const { email, username, password, fullName, phone, phoneNumber, marketingEmails } = req.body
 
@@ -39,6 +42,9 @@ router.post('/signup', async (req, res) => {
     // Validate email
     const emailValidation = validateEmail(email)
     if (!emailValidation.isValid) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:15',message:'Signup - email validation failed',data:{error:emailValidation.error},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return res.status(400).json({ 
         error: emailValidation.error,
         field: 'email'
@@ -48,6 +54,9 @@ router.post('/signup', async (req, res) => {
     // Validate username
     const usernameValidation = validateUsername(username)
     if (!usernameValidation.isValid) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:23',message:'Signup - username validation failed',data:{error:usernameValidation.error},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return res.status(400).json({ 
         error: usernameValidation.error,
         field: 'username'
@@ -57,6 +66,9 @@ router.post('/signup', async (req, res) => {
     // Validate password
     const passwordValidation = validatePassword(password)
     if (!passwordValidation.isValid) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:31',message:'Signup - password validation failed',data:{errors:passwordValidation.errors},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       return res.status(400).json({ 
         error: 'Password does not meet requirements',
         field: 'password',
@@ -82,167 +94,78 @@ router.post('/signup', async (req, res) => {
       })
     }
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:40',message:'Signup - before Supabase call',data:{hasSupabaseClient:!!supabase,frontendUrl:process.env.FRONTEND_URL||'http://localhost:5173'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
 
-    // Sign up user with Supabase Admin client to auto-confirm email
-    // This ensures users can login immediately and welcome email is sent reliably
-    let data, error, session
-    
-    if (supabaseAdmin) {
-      // Use admin client to create user with auto-confirmed email (permanent solution)
-      console.log('[AUTH] Using admin client to create user with auto-confirmed email')
-      const { data: adminData, error: adminError } = await supabaseAdmin.auth.admin.createUser({
-        email: email.trim().toLowerCase(),
-        password,
-        email_confirm: true, // Auto-confirm email - bypasses Supabase email confirmation
-        user_metadata: {
+    // Sign up user with Supabase
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
           username: username,
           full_name: fullName.trim(),
           phone: phoneValue,
           marketing_emails: marketingEmails || false
-        }
-      })
-      
-      if (adminError) {
-        console.error('[AUTH] Admin user creation error:', adminError)
-        error = adminError
-        data = null
-        session = null
-      } else if (adminData?.user) {
-        // User created successfully with admin client (email auto-confirmed)
-        // Return user immediately - frontend can handle login since email is confirmed
-        console.log('[AUTH] User created successfully with admin client, email auto-confirmed')
-        
-        data = {
-          user: adminData.user,
-          session: null // User is confirmed, frontend can login immediately
-        }
-        session = null
-        error = null
-      } else {
-        // Unexpected: adminData exists but no user
-        console.error('[AUTH] Admin user creation returned data but no user object:', adminData)
-        error = { message: 'User creation failed - no user data returned' }
-        data = null
-        session = null
+        },
+        emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
       }
-    } else {
-      // Fallback to regular signup if admin client is not available
-      console.warn('[AUTH] Admin client not available, using regular signup. Set SUPABASE_SERVICE_ROLE_KEY for auto-confirmation.')
-      const signUpResult = await supabase.auth.signUp({
-        email: email.trim().toLowerCase(),
-        password,
-        options: {
-          data: {
-            username: username,
-            full_name: fullName.trim(),
-            phone: phoneValue,
-            marketing_emails: marketingEmails || false
-          },
-          emailRedirectTo: `${process.env.FRONTEND_URL || 'https://marketgreen.shop'}/auth/callback`
-        }
-      })
-      data = signUpResult.data
-      error = signUpResult.error
-      session = signUpResult.data?.session || null
-    }
+    })
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:52',message:'Signup - Supabase response',data:{hasError:!!error,hasData:!!data,hasUser:!!data?.user,hasSession:!!data?.session,errorMessage:error?.message||null,errorCode:error?.status||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
 
     if (error) {
-      // Safely extract error message
-      const errorMessage = error?.message || error?.msg || (typeof error === 'string' ? error : JSON.stringify(error)) || 'An unknown error occurred'
-      
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:54',message:'Signup - Supabase error occurred',data:{errorMessage:error.message,errorStatus:error.status,isAlreadyRegistered:error.message.includes('already registered')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
       // Handle specific Supabase errors
-      if (errorMessage.includes('already registered') || errorMessage.includes('User already registered')) {
+      if (error.message.includes('already registered')) {
         return res.status(409).json({ 
           error: 'An account with this email already exists',
           field: 'email'
         })
       }
-      
-      // Log the full error for debugging
-      console.error('[AUTH] Signup error details:', {
-        error: error,
-        message: errorMessage,
-        status: error?.status,
-        code: error?.code
-      })
-      
       return res.status(400).json({ 
-        error: errorMessage,
-        details: process.env.NODE_ENV === 'development' ? error : undefined
+        error: error.message 
       })
     }
 
-    // Handle user profile - database trigger may have already created it
-    if (data?.user) {
-      // Check if profile already exists (created by database trigger)
-      const { data: existingProfile, error: checkError } = await supabase
+    // Create user profile in profiles table
+    if (data.user) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:67',message:'Signup - creating profile',data:{userId:data.user.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+      // #endregion
+      const { error: profileError } = await supabase
         .from('profiles')
-        .select('id, username, full_name, phone, marketing_emails')
-        .eq('id', data.user.id)
-        .single()
+        .insert({
+          id: data.user.id,
+          username: username,
+          email: email,
+          full_name: fullName.trim(),
+          phone: phoneValue,
+          marketing_emails: marketingEmails || false,
+          created_at: new Date().toISOString()
+        })
 
-      if (checkError && checkError.code === 'PGRST116') {
-        // Profile doesn't exist (PGRST116 = no rows returned), create it
-        // This happens if the database trigger didn't fire or failed
-        console.log('[AUTH] Profile not found, creating manually...')
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            username: username,
-            email: email,
-            full_name: fullName.trim(),
-            phone: phoneValue,
-            marketing_emails: marketingEmails || false,
-            created_at: new Date().toISOString()
-          })
-
-        if (profileError) {
-          console.error('[AUTH] Error creating profile:', profileError)
-          // Don't fail signup if profile creation fails
-        } else {
-          console.log('[AUTH] Profile created successfully')
-        }
-      } else if (existingProfile) {
-        // Profile exists (created by database trigger), update metadata if needed
-        const needsUpdate = 
-          existingProfile.username !== username ||
-          existingProfile.full_name !== fullName.trim() ||
-          existingProfile.phone !== phoneValue ||
-          existingProfile.marketing_emails !== (marketingEmails || false)
-
-        if (needsUpdate) {
-          console.log('[AUTH] Profile exists, updating metadata...')
-          const { error: updateError } = await supabase
-            .from('profiles')
-            .update({
-              username: username,
-              full_name: fullName.trim(),
-              phone: phoneValue,
-              marketing_emails: marketingEmails || false
-            })
-            .eq('id', data.user.id)
-
-          if (updateError) {
-            console.warn('[AUTH] Error updating profile metadata:', updateError)
-            // Don't fail signup
-          } else {
-            console.log('[AUTH] Profile metadata updated successfully')
-          }
-        } else {
-          console.log('[AUTH] Profile already exists with correct data')
-        }
-      } else if (checkError) {
-        // Other error checking for profile
-        console.warn('[AUTH] Error checking profile:', checkError)
-        // Don't fail signup - profile might still be created by trigger
+      if (profileError) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:78',message:'Signup - profile creation error',data:{errorMessage:profileError.message,errorCode:profileError.code,errorDetails:profileError.details},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
+        console.error('Error creating profile:', profileError)
+        // Don't fail the signup if profile creation fails
+      } else {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:81',message:'Signup - profile created successfully',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
       }
     }
 
     // Send welcome email (non-blocking - don't fail signup if email fails)
     // Send email regardless of profile creation success
-    if (data?.user) {
+    if (data.user) {
       console.log('[EMAIL] Attempting to send welcome email to:', email)
       console.log('[EMAIL] Gmail config check:', {
         hasGmailUser: !!process.env.GMAIL_USER,
@@ -250,43 +173,49 @@ router.post('/signup', async (req, res) => {
         gmailUser: process.env.GMAIL_USER ? `${process.env.GMAIL_USER.substring(0, 3)}***` : 'not set'
       })
       
-      // Send welcome email with better error handling
-      try {
-        const emailResult = await sendWelcomeEmail(email, fullName.trim() || username)
-        if (emailResult.success) {
-          console.log('[EMAIL] ✅ Welcome email sent successfully to:', email, 'Message ID:', emailResult.messageId)
-        } else {
-          console.error('[EMAIL] ❌ Welcome email failed to send:', {
-            email: email,
-            error: emailResult.error,
-            reason: !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD 
-              ? 'Gmail credentials not configured' 
-              : 'Email service error'
-          })
-        }
-      } catch (emailError) {
-        console.error('[EMAIL] ❌ Exception sending welcome email:', {
-          email: email,
-          error: emailError.message,
-          stack: emailError.stack
+      sendWelcomeEmail(email, fullName.trim() || username)
+        .then(result => {
+          if (result.success) {
+            console.log('[EMAIL] ✅ Welcome email sent successfully to:', email, 'Message ID:', result.messageId)
+          } else {
+            console.error('[EMAIL] ❌ Welcome email failed to send:', {
+              email: email,
+              error: result.error,
+              reason: !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD 
+                ? 'Gmail credentials not configured' 
+                : 'Email service error'
+            })
+          }
         })
-        // Email failure should not affect signup success
-      }
+        .catch(error => {
+          console.error('[EMAIL] ❌ Exception sending welcome email:', {
+            email: email,
+            error: error.message,
+            stack: error.stack
+          })
+          // Email failure should not affect signup success
+        })
     }
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:84',message:'Signup - sending success response',data:{hasSession:!!data.session},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     res.status(201).json({
       message: 'Account created successfully',
       user: {
-        id: data?.user?.id,
-        email: data?.user?.email,
+        id: data.user?.id,
+        email: data.user?.email,
         username: username,
         full_name: fullName.trim(),
         phone: phoneValue
       },
-      // Session may be null when using admin client - user is auto-confirmed and can login immediately
-      session: session || data?.session || null
+      // Include session if email confirmation is disabled
+      session: data.session || null
     })
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:95',message:'Signup - catch block error',data:{errorMessage:error.message,errorStack:error.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     console.error('Signup error:', error)
     res.status(500).json({ 
       error: 'An error occurred during signup. Please try again.' 
