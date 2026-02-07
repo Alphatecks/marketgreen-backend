@@ -196,8 +196,28 @@ router.post('/signup', async (req, res) => {
         })
     }
 
+    // Sign in the user to generate access token if session wasn't created during signup
+    let session = data.session
+    if (!session && data.user) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:84',message:'Signup - signing in user to generate session',data:{userId:data.user.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password
+      })
+
+      if (!signInError && signInData?.session) {
+        session = signInData.session
+        console.log('[AUTH] ✅ Session generated after signup')
+      } else if (signInError) {
+        console.warn('[AUTH] ⚠️  Could not generate session after signup:', signInError.message)
+        // Continue without session - user may need to confirm email first
+      }
+    }
+
     // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:84',message:'Signup - sending success response',data:{hasSession:!!data.session},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7244/ingest/a231184e-915a-41f4-b027-e9b8c209d3b3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/auth.routes.js:84',message:'Signup - sending success response',data:{hasSession:!!session},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
     // #endregion
     res.status(201).json({
       message: 'Account created successfully',
@@ -208,8 +228,13 @@ router.post('/signup', async (req, res) => {
         full_name: fullName.trim(),
         phone: phoneValue
       },
-      // Include session if email confirmation is disabled
-      session: data.session || null
+      // Always include session with access token if available
+      session: session ? {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in,
+        token_type: session.token_type
+      } : null
     })
   } catch (error) {
     // #region agent log

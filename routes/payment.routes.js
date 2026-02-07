@@ -1,6 +1,7 @@
 import express from 'express'
 import paystack from 'paystack'
 import { supabase, supabaseAdmin } from '../config/supabase.js'
+import { sendOrderConfirmationEmail } from '../utils/emailService.js'
 import dotenv from 'dotenv'
 
 dotenv.config()
@@ -34,6 +35,118 @@ const authenticateUser = async (req) => {
   }
 
   return { user }
+}
+
+// Helper function to send order confirmation email after successful payment
+// Uses a simple in-memory cache to prevent duplicate emails within a short time window
+const emailSentCache = new Map()
+const CACHE_TTL = 60000 // 60 seconds - prevent duplicate emails within 1 minute
+
+const sendOrderConfirmation = async (orderId, userId) => {
+  try {
+    // Check cache to prevent duplicate emails
+    const cacheKey = `${orderId}-${userId}`
+    const cached = emailSentCache.get(cacheKey)
+    if (cached && (Date.now() - cached) < CACHE_TTL) {
+      console.log('[EMAIL] ⏭️  Skipping duplicate email for order:', orderId, '(already sent recently)')
+      return
+    }
+
+    // Fetch order details
+    const { data: order, error: orderError } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single()
+
+    if (orderError || !order) {
+      console.error('[EMAIL] Error fetching order for confirmation email:', orderError)
+      return
+    }
+
+    // Only send email if order is actually paid and confirmed
+    // This prevents sending emails for orders that are already processed
+    if (order.payment_status !== 'paid' || order.status !== 'confirmed') {
+      console.log('[EMAIL] ⏭️  Skipping email - order not in paid/confirmed state:', {
+        orderId,
+        payment_status: order.payment_status,
+        status: order.status
+      })
+      return
+    }
+
+    // Fetch user profile to get email and name
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('email, full_name, username')
+      .eq('id', userId)
+      .single()
+
+    // Get user email - try profile email, then auth.users email
+    let userEmail = profile?.email
+    let userName = profile?.full_name || profile?.username || 'Customer'
+
+    if (!userEmail && supabaseAdmin) {
+      try {
+        // Try to get email from auth.users using admin client
+        const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(userId)
+        if (!userError && user?.email) {
+          userEmail = user.email
+        }
+        if (!userName && user?.user_metadata?.full_name) {
+          userName = user.user_metadata.full_name
+        }
+      } catch (authError) {
+        console.warn('[EMAIL] Could not fetch user email from auth:', authError.message)
+      }
+    }
+
+    if (!userEmail) {
+      console.error('[EMAIL] No email found for user:', userId)
+      return
+    }
+
+    // Mark as sent in cache before sending (to prevent race conditions)
+    emailSentCache.set(cacheKey, Date.now())
+    
+    // Clean up old cache entries (keep cache size manageable)
+    if (emailSentCache.size > 1000) {
+      const now = Date.now()
+      for (const [key, timestamp] of emailSentCache.entries()) {
+        if (now - timestamp > CACHE_TTL) {
+          emailSentCache.delete(key)
+        }
+      }
+    }
+
+    // Send order confirmation email (non-blocking)
+    sendOrderConfirmationEmail(userEmail, order, userName)
+      .then(result => {
+        if (result.success) {
+          console.log('[EMAIL] ✅ Order confirmation email sent successfully for order:', orderId, 'Message ID:', result.messageId)
+        } else {
+          // Remove from cache on failure so it can be retried
+          emailSentCache.delete(cacheKey)
+          console.error('[EMAIL] ❌ Order confirmation email failed to send:', {
+            orderId: orderId,
+            email: userEmail,
+            error: result.error
+          })
+        }
+      })
+      .catch(error => {
+        // Remove from cache on failure so it can be retried
+        emailSentCache.delete(cacheKey)
+        console.error('[EMAIL] ❌ Exception sending order confirmation email:', {
+          orderId: orderId,
+          email: userEmail,
+          error: error.message
+        })
+      })
+  } catch (error) {
+    console.error('[EMAIL] ❌ Error in sendOrderConfirmation helper:', error)
+    // Don't throw - email failure shouldn't break payment flow
+  }
 }
 
 // Get Paystack public key (for frontend to use Paystack Inline)
@@ -111,19 +224,33 @@ router.post('/charge', async (req, res) => {
     const transaction = response.data
 
     // Update order payment status if order_id exists
-    if (orderId) {
-      const { error: updateError } = await supabaseAdmin
+    if (orderId && transaction.status === 'success') {
+      // First check current order status to avoid duplicate updates
+      const { data: currentOrder } = await supabaseAdmin
         .from('orders')
-        .update({
-          payment_status: transaction.status === 'success' ? 'paid' : 'failed',
-          payment_method: 'paystack',
-          updated_at: new Date().toISOString()
-        })
+        .select('payment_status, status')
         .eq('id', orderId)
-        .eq('user_id', user.id)
+        .single()
 
-      if (updateError) {
-        console.error('Error updating order payment status:', updateError)
+      // Only update if not already paid/confirmed
+      if (currentOrder && currentOrder.payment_status !== 'paid') {
+        const { error: updateError } = await supabaseAdmin
+          .from('orders')
+          .update({
+            payment_status: 'paid',
+            payment_method: 'paystack',
+            status: 'confirmed',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', orderId)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error updating order payment status:', updateError)
+        } else {
+          // Send order confirmation email after successful payment
+          sendOrderConfirmation(orderId, user.id)
+        }
       }
     }
 
@@ -276,22 +403,35 @@ router.get('/callback', async (req, res) => {
     const isSuccess = transaction.status === 'success'
 
     // Update order payment status if order_id exists
-    if (transaction.metadata?.order_id) {
+    if (transaction.metadata?.order_id && isSuccess) {
       const orderId = transaction.metadata.order_id
       
-      // Update order payment status using admin client to bypass RLS
-      const { error: updateError } = await supabaseAdmin
+      // First check current order status to avoid duplicate updates
+      const { data: currentOrder } = await supabaseAdmin
         .from('orders')
-        .update({
-          payment_status: isSuccess ? 'paid' : 'failed',
-          payment_method: 'paystack',
-          status: isSuccess ? 'confirmed' : 'pending',
-          updated_at: new Date().toISOString()
-        })
+        .select('payment_status, status')
         .eq('id', orderId)
+        .single()
 
-      if (updateError) {
-        console.error('Error updating order payment status:', updateError)
+      // Only update if not already paid/confirmed
+      if (currentOrder && currentOrder.payment_status !== 'paid') {
+        // Update order payment status using admin client to bypass RLS
+        const { error: updateError } = await supabaseAdmin
+          .from('orders')
+          .update({
+            payment_status: 'paid',
+            payment_method: 'paystack',
+            status: 'confirmed',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', orderId)
+
+        if (updateError) {
+          console.error('Error updating order payment status:', updateError)
+        } else if (transaction.metadata?.user_id) {
+          // Send order confirmation email after successful payment
+          sendOrderConfirmation(orderId, transaction.metadata.user_id)
+        }
       }
     }
 
@@ -417,22 +557,36 @@ router.get('/verify/:reference', async (req, res) => {
     }
 
     // Update order payment status if order_id exists
-    if (transaction.metadata?.order_id) {
+    if (transaction.metadata?.order_id && transaction.status === 'success') {
       const orderId = transaction.metadata.order_id
       
-      // Update order payment status
-      const { error: updateError } = await supabaseAdmin
+      // First check current order status to avoid duplicate updates
+      const { data: currentOrder } = await supabaseAdmin
         .from('orders')
-        .update({
-          payment_status: transaction.status === 'success' ? 'paid' : 'failed',
-          payment_method: 'paystack',
-          updated_at: new Date().toISOString()
-        })
+        .select('payment_status, status')
         .eq('id', orderId)
-        .eq('user_id', user.id)
+        .single()
 
-      if (updateError) {
-        console.error('Error updating order payment status:', updateError)
+      // Only update if not already paid/confirmed
+      if (currentOrder && currentOrder.payment_status !== 'paid') {
+        // Update order payment status
+        const { error: updateError } = await supabaseAdmin
+          .from('orders')
+          .update({
+            payment_status: 'paid',
+            payment_method: 'paystack',
+            status: 'confirmed',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', orderId)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error updating order payment status:', updateError)
+        } else {
+          // Send order confirmation email after successful payment
+          sendOrderConfirmation(orderId, user.id)
+        }
       }
     }
 
@@ -491,19 +645,34 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       if (transaction.metadata?.order_id) {
         const orderId = transaction.metadata.order_id
 
-        const { error: updateError } = await supabaseAdmin
+        // First check current order status to avoid duplicate updates
+        const { data: currentOrder } = await supabaseAdmin
           .from('orders')
-          .update({
-            payment_status: 'paid',
-            payment_method: 'paystack',
-            status: 'confirmed', // Update order status to confirmed when payment succeeds
-            updated_at: new Date().toISOString()
-          })
+          .select('payment_status, status')
           .eq('id', orderId)
+          .single()
 
-        if (updateError) {
-          console.error('Error updating order from webhook:', updateError)
-          return res.status(500).json({ error: 'Failed to update order' })
+        // Only update if not already paid/confirmed
+        if (currentOrder && currentOrder.payment_status !== 'paid') {
+          const { error: updateError } = await supabaseAdmin
+            .from('orders')
+            .update({
+              payment_status: 'paid',
+              payment_method: 'paystack',
+              status: 'confirmed', // Update order status to confirmed when payment succeeds
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', orderId)
+
+          if (updateError) {
+            console.error('Error updating order from webhook:', updateError)
+            return res.status(500).json({ error: 'Failed to update order' })
+          }
+
+          // Send order confirmation email after successful payment
+          if (transaction.metadata?.user_id) {
+            sendOrderConfirmation(orderId, transaction.metadata.user_id)
+          }
         }
       }
     } else if (event.event === 'charge.failed') {
