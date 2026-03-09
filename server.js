@@ -19,6 +19,7 @@ import cartRoutes from './routes/cart.routes.js'
 import wishlistRoutes from './routes/wishlist.routes.js'
 import activityRoutes from './routes/activity.routes.js'
 import notificationRoutes from './routes/notification.routes.js'
+import tagRoutes from './routes/tag.routes.js'
 import { testEmailConnection } from './utils/emailService.js'
 
 // Load environment variables
@@ -120,6 +121,7 @@ app.use('/api/cart', cartRoutes)
 app.use('/api/wishlist', wishlistRoutes)
 app.use('/api/activity', activityRoutes)
 app.use('/api/notifications', notificationRoutes)
+app.use('/api/tags', tagRoutes)
 
 // 404 handler
 app.use((req, res) => {
