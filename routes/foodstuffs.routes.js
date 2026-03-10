@@ -4,10 +4,10 @@ import { supabase } from '../config/supabase.js'
 const router = express.Router()
 
 /**
- * GET /api/tags/popular
- * Returns popular tags from active products (by usage count).
- * Query: limit (default 20) - max number of tags to return.
- * Response: { tags: string[] } - tag names only, ordered by popularity.
+ * GET /api/foodstuffs/popular
+ * Returns popular foodstuffs from active products (derived from product tags by usage count).
+ * Query: limit (default 20) - max number of items to return.
+ * Response: { foodstuffs: string[] } - names only, ordered by popularity.
  */
 router.get('/popular', async (req, res) => {
   try {
@@ -22,24 +22,24 @@ router.get('/popular', async (req, res) => {
       return res.status(400).json({ error: error.message })
     }
 
-    const countByTag = new Map()
+    const countByItem = new Map()
     for (const row of products || []) {
       const tags = row?.tags
       if (Array.isArray(tags)) {
         for (const t of tags) {
           const name = typeof t === 'string' ? t.trim() : String(t).trim()
           if (!name) continue
-          countByTag.set(name, (countByTag.get(name) || 0) + 1)
+          countByItem.set(name, (countByItem.get(name) || 0) + 1)
         }
       }
     }
 
-    const sorted = [...countByTag.entries()]
+    const sorted = [...countByItem.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit)
       .map(([name]) => name)
 
-    res.json({ tags: sorted })
+    res.json({ foodstuffs: sorted })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
