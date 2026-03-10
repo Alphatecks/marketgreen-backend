@@ -10,7 +10,7 @@ import {
   ALLOWED_CATEGORIES
 } from '../utils/productValidation.js'
 import { convertProductFields } from '../utils/fieldConverter.js'
-import { sendOrderStatusUpdateEmail } from '../utils/emailService.js'
+import { sendOrderStatusUpdateEmail, sendNewsletterToSubscribers } from '../utils/emailService.js'
 
 const router = express.Router()
 
@@ -3845,6 +3845,60 @@ router.get('/newsletter', checkAdmin, async (req, res) => {
     })
   } catch (error) {
     console.error('Get newsletter subscribers error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Send newsletter to all (or a slice of) subscribers. From: support@marketgreen.shop (or NEWSLETTER_FROM_EMAIL).
+router.post('/newsletter/send', checkAdmin, async (req, res) => {
+  try {
+    const { subject, html, limit: limitParam } = req.body
+
+    if (!subject || typeof subject !== 'string' || !subject.trim()) {
+      return res.status(400).json({ error: 'subject is required and must be a non-empty string' })
+    }
+    if (!html || typeof html !== 'string' || !html.trim()) {
+      return res.status(400).json({ error: 'html is required and must be a non-empty string (HTML body)' })
+    }
+
+    if (!supabaseAdmin) {
+      return res.status(503).json({ error: 'Service unavailable' })
+    }
+
+    const limit = Math.min(Math.max(parseInt(limitParam, 10) || 5000, 1), 5000)
+    const { data: subscribers, error } = await supabaseAdmin
+      .from('newsletter_subscribers')
+      .select('email')
+      .limit(limit)
+
+    if (error) {
+      return res.status(400).json({ error: error.message })
+    }
+    if (!subscribers || subscribers.length === 0) {
+      return res.status(200).json({
+        message: 'No subscribers to send to.',
+        sent: 0,
+        failed: 0,
+        total: 0,
+        errors: []
+      })
+    }
+
+    const { sent, failed, errors } = await sendNewsletterToSubscribers(
+      subscribers,
+      subject.trim(),
+      html.trim()
+    )
+
+    res.status(200).json({
+      message: `Newsletter sent to ${sent} subscriber(s).${failed ? ` ${failed} failed.` : ''}`,
+      sent,
+      failed,
+      total: subscribers.length,
+      errors: errors.slice(0, 50)
+    })
+  } catch (error) {
+    console.error('Send newsletter error:', error)
     res.status(500).json({ error: error.message })
   }
 })

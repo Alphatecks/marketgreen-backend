@@ -807,6 +807,64 @@ const getOrderStatusUpdateEmailTemplate = (order, firstName, oldStatus, newStatu
   `.trim()
 }
 
+/** Newsletter sender: use support@marketgreen.shop (override with NEWSLETTER_FROM_EMAIL) */
+const getNewsletterFromEmail = () =>
+  process.env.NEWSLETTER_FROM_EMAIL || process.env.RESEND_FROM_EMAIL || 'support@marketgreen.shop'
+
+/**
+ * Send one newsletter email to a single recipient (from support@marketgreen.shop).
+ * @param {string} to - Recipient email
+ * @param {string} subject - Email subject
+ * @param {string} html - HTML body
+ * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
+ */
+export const sendNewsletterEmail = async (to, subject, html) => {
+  if (!process.env.RESEND_API_KEY) {
+    return { success: false, error: 'Email service not configured. Missing: RESEND_API_KEY' }
+  }
+  const companyName = process.env.COMPANY_NAME || 'MarketGreen'
+  const fromEmail = getNewsletterFromEmail()
+  const { data, error } = await resend.emails.send({
+    from: `${companyName} <${fromEmail}>`,
+    to,
+    subject,
+    html
+  })
+  if (error) return { success: false, error: error.message }
+  return { success: true, messageId: data?.id }
+}
+
+/**
+ * Send newsletter to many subscribers (one email per recipient).
+ * @param {Array<{ email: string }>} subscribers - List of { email }
+ * @param {string} subject - Email subject
+ * @param {string} html - HTML body
+ * @returns {Promise<{ sent: number, failed: number, errors: Array<{ email: string, error: string }> }>}
+ */
+export const sendNewsletterToSubscribers = async (subscribers, subject, html) => {
+  let sent = 0
+  let failed = 0
+  const errors = []
+  const batchSize = 20
+  for (let i = 0; i < subscribers.length; i += batchSize) {
+    const batch = subscribers.slice(i, i + batchSize)
+    const results = await Promise.allSettled(
+      batch.map((s) => sendNewsletterEmail(s.email, subject, html))
+    )
+    results.forEach((result, idx) => {
+      const email = batch[idx].email
+      if (result.status === 'fulfilled' && result.value?.success) {
+        sent++
+      } else {
+        failed++
+        const errMsg = result.status === 'rejected' ? result.reason?.message : result.value?.error
+        errors.push({ email, error: errMsg || 'Unknown error' })
+      }
+    })
+  }
+  return { sent, failed, errors }
+}
+
 /**
  * Test email configuration
  * @returns {Promise<boolean>} - True if email service is properly configured
