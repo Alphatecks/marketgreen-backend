@@ -141,6 +141,44 @@ router.get('/', async (req, res) => {
   }
 })
 
+// Get order tracking (optional in-app timeline; events empty until tracking_events table exists)
+router.get('/:id/tracking', async (req, res) => {
+  try {
+    const { id } = req.params
+    const token = req.headers.authorization?.replace('Bearer ', '')
+
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' })
+    }
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !user) {
+      return res.status(401).json({ error: authError?.message || 'Invalid or expired token' })
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('orders')
+      .select('tracking_number, tracking_url, carrier')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .single()
+
+    if (error || !data) {
+      return res.status(404).json({ error: 'Order not found' })
+    }
+
+    res.json({
+      tracking_number: data.tracking_number || null,
+      carrier: data.carrier || null,
+      tracking_url: data.tracking_url || null,
+      events: []
+    })
+  } catch (error) {
+    console.error('Get order tracking error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Get single order
 router.get('/:id', async (req, res) => {
   try {

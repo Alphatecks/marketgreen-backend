@@ -3653,7 +3653,7 @@ router.post('/reviews/bulk-action', checkAdmin, async (req, res) => {
 router.put('/orders/:id/status', checkAdmin, async (req, res) => {
   try {
     const { id } = req.params
-    const { status, trackingNumber, notes } = req.body
+    const { status, trackingNumber, tracking_url, carrier, notes } = req.body
 
     // Validate UUID format
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -3702,13 +3702,10 @@ router.put('/orders/:id/status', checkAdmin, async (req, res) => {
       updated_at: new Date().toISOString()
     }
 
-    // Handle status-specific fields
-    if (status === 'shipped') {
-      // If tracking number is provided, update it
-      if (trackingNumber) {
-        updateData.tracking_number = trackingNumber.trim()
-      }
-    }
+    // Tracking fields: set when marking shipped or when carrier provides; can be updated on any status
+    if (trackingNumber !== undefined) updateData.tracking_number = trackingNumber ? String(trackingNumber).trim() : null
+    if (tracking_url !== undefined) updateData.tracking_url = tracking_url ? String(tracking_url).trim() : null
+    if (carrier !== undefined) updateData.carrier = carrier ? String(carrier).trim().toLowerCase() : null
 
     if (status === 'delivered') {
       // Set delivered_at timestamp
@@ -3803,6 +3800,8 @@ router.put('/orders/:id/status', checkAdmin, async (req, res) => {
         status: updatedOrder.status,
         paymentStatus: updatedOrder.payment_status,
         trackingNumber: updatedOrder.tracking_number,
+        trackingUrl: updatedOrder.tracking_url,
+        carrier: updatedOrder.carrier,
         deliveredAt: updatedOrder.delivered_at,
         canceledAt: updatedOrder.canceled_at,
         updatedAt: updatedOrder.updated_at
@@ -3810,6 +3809,42 @@ router.put('/orders/:id/status', checkAdmin, async (req, res) => {
     })
   } catch (error) {
     console.error('Update order status error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ============================================
+// NEWSLETTER SUBSCRIBERS
+// ============================================
+
+// List all newsletter signups (admin only)
+router.get('/newsletter', checkAdmin, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, sortOrder = 'desc' } = req.query
+
+    if (!supabaseAdmin) {
+      return res.status(503).json({ error: 'Service unavailable' })
+    }
+
+    const { data, error, count } = await supabaseAdmin
+      .from('newsletter_subscribers')
+      .select('id, email, created_at', { count: 'exact' })
+      .order('created_at', { ascending: sortOrder === 'asc' })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1)
+
+    if (error) {
+      return res.status(400).json({ error: error.message })
+    }
+
+    res.json({
+      subscribers: data || [],
+      total: count ?? 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: (count ?? 0) > parseInt(offset) + parseInt(limit)
+    })
+  } catch (error) {
+    console.error('Get newsletter subscribers error:', error)
     res.status(500).json({ error: error.message })
   }
 })

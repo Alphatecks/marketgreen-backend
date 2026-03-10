@@ -20,6 +20,7 @@ import wishlistRoutes from './routes/wishlist.routes.js'
 import activityRoutes from './routes/activity.routes.js'
 import notificationRoutes from './routes/notification.routes.js'
 import foodstuffsRoutes from './routes/foodstuffs.routes.js'
+import newsletterRoutes from './routes/newsletter.routes.js'
 import { testEmailConnection } from './utils/emailService.js'
 
 // Load environment variables
@@ -122,6 +123,7 @@ app.use('/api/wishlist', wishlistRoutes)
 app.use('/api/activity', activityRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/foodstuffs', foodstuffsRoutes)
+app.use('/api/newsletter', newsletterRoutes)
 
 // 404 handler
 app.use((req, res) => {

@@ -59,6 +59,16 @@ If you need additional features, run the migration files in order:
    - Copy and run in Supabase SQL Editor
    - This adds auto-generated tracking numbers (format: TRK-YYYY-XXXXXX) to all new orders
 
+2. **Add tracking URL and carrier to orders:**
+   - Open `database/migrations/add_order_tracking_url_carrier.sql`
+   - Copy and run in Supabase SQL Editor
+   - Adds `tracking_url` (full carrier tracking link) and `carrier` (e.g. dhl, nipost) for "Track Package" on the frontend
+
+3. **Newsletter subscribers table:**
+   - Open `database/migrations/create_newsletter_subscribers_table.sql`
+   - Copy and run in Supabase SQL Editor
+   - Creates `newsletter_subscribers` for the footer newsletter signup form
+
 ### Step 3: Create an Admin User
 
 After setting up the schema, you need to create an admin profile:
