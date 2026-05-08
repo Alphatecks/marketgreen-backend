@@ -1,0 +1,40 @@
+# Runs a tiny real PostgREST read so the Supabase project sees activity.
+# Free-tier projects can pause after long idle periods; daily traffic helps avoid that.
+#
+# Repo secrets (Settings → Secrets → Actions):
+#   SUPABASE_URL       — e.g. https://xxxx.supabase.co
+#   SUPABASE_ANON_KEY  — Project Settings → API → anon public key
+#
+# Uses: public SELECT on active products (matches schema RLS "Products are viewable by everyone").
+
+name: Supabase keep-alive
+
+on:
+  schedule:
+    # Daily ~ 09:15 UTC (adjust timing if you like)
+    - cron: '15 9 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tiny read (products, limit 1)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SUPABASE_URL:?Add repository secret SUPABASE_URL}"
+          : "${SUPABASE_ANON_KEY:?Add repository secret SUPABASE_ANON_KEY}"
+          url="${SUPABASE_URL%/}/rest/v1/products?select=id&status=eq.active&limit=1"
+          code="$(curl -sS -o /tmp/supabase_keepalive_body -w "%{http_code}" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            "$url")"
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "Response body:"
+            cat /tmp/supabase_keepalive_body || true
+            exit 1
+          fi

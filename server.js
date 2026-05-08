@@ -41,6 +41,26 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl || '', supabaseKey || '')
 
+/** Lightweight periodic read against Supabase (while this process runs) to reduce idle pauses on free tier. */
+function startSupabaseKeepAlive(client) {
+  if (!supabaseUrl || !supabaseKey) return
+  const intervalMs = 12 * 60 * 60 * 1000 // 12 hours
+  const ping = async () => {
+    try {
+      const { error } = await client
+        .from('products')
+        .select('id')
+        .eq('status', 'active')
+        .limit(1)
+      if (error) console.warn('[supabase-keepalive]', error.message)
+    } catch (err) {
+      console.warn('[supabase-keepalive]', err?.message || err)
+    }
+  }
+  void ping()
+  setInterval(ping, intervalMs)
+}
+
 // Middleware
 // IMPORTANT: Helmet must come before CORS. Helmet sets security headers but doesn't interfere with CORS headers.
 app.use(helmet()) // Security headers
@@ -151,7 +171,9 @@ app.listen(PORT, async () => {
   console.log(`✅ CORS allowed origins: All (development mode)`)
   console.log(`🔑 Supabase URL configured: ${!!process.env.SUPABASE_URL}`)
   console.log(`🔑 Supabase Key configured: ${!!process.env.SUPABASE_ANON_KEY}`)
-  
+
+  startSupabaseKeepAlive(supabase)
+
   // Check email configuration
   const emailConfigured = !!process.env.RESEND_API_KEY
   if (emailConfigured) {
